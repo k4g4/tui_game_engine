@@ -10,9 +10,9 @@ struct Cli {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let args = game::Args::new(cli.fps).context("parsing command line arguments")?;
+    let config = game::Config::new(cli.fps).context("parsing command line arguments")?;
 
-    game::render(args).await.context("rendering snake game")?;
+    game::render(config).await.context("rendering snake game")?;
 
     Ok(())
 }

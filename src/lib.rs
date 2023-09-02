@@ -13,10 +13,12 @@ use thiserror::Error;
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=5;
 
-pub struct Args {
+/// Configuration settings for the game.
+pub struct Config {
     fps: u32,
 }
 
+/// Error returned from the game.
 #[derive(Error, Debug)]
 pub enum GameError {
     #[error(transparent)]
@@ -29,7 +31,7 @@ pub enum GameError {
     Unknown,
 }
 
-impl Args {
+impl Config {
     pub fn new(fps: u32) -> Result<Self, GameError> {
         if !FPS_BOUNDS.contains(&fps) {
             return Err(GameError::BadArg(format!(
@@ -90,10 +92,11 @@ impl Drop for RenderHandle {
     }
 }
 
-pub async fn render(args: Args) -> Result<(), GameError> {
+/// Begin rendering the game using the provided `config` settings.
+pub async fn render(config: Config) -> Result<(), GameError> {
     let mut handle = RenderHandle::new()?;
     let terminal = &mut handle.terminal;
-    let sleep_duration = Duration::from_secs_f32(1 as f32 / args.fps as f32);
+    let sleep_duration = Duration::from_secs_f32(1 as f32 / config.fps as f32);
 
     for i in 0..20 {
         terminal.draw(|frame| {

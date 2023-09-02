@@ -5,6 +5,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
+    prelude::*,
     widgets::{Block, BorderType, Borders},
     Terminal,
 };
@@ -15,6 +16,7 @@ const FPS_BOUNDS: RangeInclusive<u32> = 1..=5;
 
 /// Configuration settings for the game.
 pub struct Config {
+    title: String,
     fps: u32,
 }
 
@@ -32,15 +34,16 @@ pub enum GameError {
 }
 
 impl Config {
-    pub fn new(fps: u32) -> Result<Self, GameError> {
+    pub fn new(title: String, fps: u32) -> Result<Self, GameError> {
         if !FPS_BOUNDS.contains(&fps) {
             return Err(GameError::BadArg(format!(
                 "fps must be between {} and {}",
-                FPS_BOUNDS.start(), FPS_BOUNDS.end()
+                FPS_BOUNDS.start(),
+                FPS_BOUNDS.end()
             )));
         }
 
-        Ok(Self { fps })
+        Ok(Self { title, fps })
     }
 }
 
@@ -96,17 +99,19 @@ impl Drop for RenderHandle {
 pub async fn render(config: Config) -> Result<(), GameError> {
     let mut handle = RenderHandle::new()?;
     let terminal = &mut handle.terminal;
-    let sleep_duration = Duration::from_secs_f32(1 as f32 / config.fps as f32);
 
-    for i in 0..20 {
+    let sleep_duration = Duration::from_secs_f32(1_f32 / config.fps as f32);
+
+    let game_widget = Block::default()
+        .title(format!(" {} ", config.title))
+        .title_style(Style::default().add_modifier(Modifier::BOLD))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick);
+
+    for _ in 0..20 {
         terminal.draw(|frame| {
-            frame.render_widget(
-                Block::default()
-                    .title(i.to_string())
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Thick),
-                frame.size(),
-            );
+            frame.render_widget(game_widget.clone(), frame.size());
         })?;
 
         tokio::time::sleep(sleep_duration).await;

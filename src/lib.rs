@@ -8,16 +8,38 @@ use ratatui::{
     widgets::{Block, BorderType, Borders},
     Terminal,
 };
-use std::{io, time::Duration};
+use std::{io, ops::RangeInclusive, time::Duration};
 use thiserror::Error;
+
+const FPS_BOUNDS: RangeInclusive<u32> = 1..=5;
+
+pub struct Args {
+    fps: u32,
+}
 
 #[derive(Error, Debug)]
 pub enum GameError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
+    #[error("bad argument: {}", .0)]
+    BadArg(String),
+
     #[error("unknown error")]
     Unknown,
+}
+
+impl Args {
+    pub fn new(fps: u32) -> Result<Self, GameError> {
+        if !FPS_BOUNDS.contains(&fps) {
+            return Err(GameError::BadArg(format!(
+                "fps must be between {} and {}",
+                FPS_BOUNDS.start(), FPS_BOUNDS.end()
+            )));
+        }
+
+        Ok(Self { fps })
+    }
 }
 
 struct RenderHandle {
@@ -68,11 +90,12 @@ impl Drop for RenderHandle {
     }
 }
 
-pub fn render() -> Result<(), GameError> {
+pub async fn render(args: Args) -> Result<(), GameError> {
     let mut handle = RenderHandle::new()?;
     let terminal = &mut handle.terminal;
+    let sleep_duration = Duration::from_secs_f32(1 as f32 / args.fps as f32);
 
-    for i in 0..100 {
+    for i in 0..20 {
         terminal.draw(|frame| {
             frame.render_widget(
                 Block::default()
@@ -82,7 +105,8 @@ pub fn render() -> Result<(), GameError> {
                 frame.size(),
             );
         })?;
-        std::thread::sleep(Duration::from_secs(1));
+
+        tokio::time::sleep(sleep_duration).await;
     }
 
     Ok(())

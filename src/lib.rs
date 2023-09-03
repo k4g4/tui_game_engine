@@ -7,11 +7,7 @@ use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
     style::ParseColorError,
-    text::Line as TextLine,
-    widgets::{
-        canvas::{Canvas, Context, Line},
-        Block, BorderType, Borders,
-    },
+    widgets::{canvas::Canvas, Block, BorderType, Borders},
     Terminal,
 };
 use std::{
@@ -24,6 +20,9 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+
+mod entity;
+use entity::{Entity, Line, Point, TextBox};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=10;
 
@@ -121,7 +120,16 @@ impl Drop for TerminalHandle {
     }
 }
 
-trait Entity {}
+/// Input received from the player.
+#[derive(Clone, Copy)]
+pub enum Input {
+    None,
+    Up,
+    Down,
+    Left,
+    Right,
+    Quit,
+}
 
 struct State {
     width: f64,
@@ -139,15 +147,6 @@ impl State {
             entities: vec![],
         }
     }
-}
-
-enum Input {
-    None,
-    Up,
-    Down,
-    Left,
-    Right,
-    Quit,
 }
 
 /// Begin rendering the game using the provided `config` settings.
@@ -183,55 +182,57 @@ pub fn init(config: Config) -> Result<(), GameError> {
         .x_bounds([0f64, width as f64])
         .y_bounds([0f64, height as f64]);
 
-    let recent_input = Arc::new(Mutex::new(Input::None));
+    let input = Arc::new(Mutex::new(Input::None));
 
-    let write_to_recent_input = recent_input.clone();
-    thread::spawn(move || loop {
-        *write_to_recent_input.lock().unwrap() = handle_input(crossterm::event::read().unwrap());
-    });
+    // separate thread reads keyboard and updates the current input
+    {
+        let input = input.clone();
+        thread::spawn(move || loop {
+            *input.lock().unwrap() = translate_input(crossterm::event::read().unwrap());
+        });
+    }
+
+    {
+        let entities = &mut state.borrow_mut().entities;
+        entities.push(Box::new(Line::new(
+            (Point::new(10f64, 10f64), Point::new(25f64, 25f64)),
+            ui_color,
+        )));
+        entities.push(Box::new(TextBox::new(
+            "Hello, world!".into(),
+            Point::new(20f64, 20f64),
+            Style::default().fg(ui_color),
+        )));
+    }
 
     loop {
         terminal.draw(|frame| {
             let canvas = canvas_template.clone().paint(|ctx| {
-                render_frame(ctx, state.clone());
+                for entity in &state.borrow().entities {
+                    entity.render(ctx);
+                }
             });
             frame.render_widget(canvas, frame.size());
         })?;
 
         thread::sleep(sleep_duration);
 
-        match *recent_input.lock().expect("not poisoned") {
+        let mut input = input.lock().expect("not poisoned");
+        match *input {
             Input::Quit => break,
-            _ => {}
+            input => {
+                for entity in &mut state.borrow_mut().entities {
+                    entity.handle_input(input);
+                }
+            }
         }
-        
-        struct Thing;
-        impl Entity for Thing {}
-        state.borrow_mut().entities.push(Box::new(Thing));
+        *input = Input::None;
     }
 
     Ok(())
 }
 
-fn render_frame(ctx: &mut Context, state: Rc<RefCell<State>>) {
-    let state = state.borrow();
-    let text = format!("Entities: {}", state.entities.len());
-
-    ctx.print(
-        0.5 * state.width,
-        0.5 * state.height,
-        TextLine::styled(text, Style::default().fg(state.ui_color).bold()),
-    );
-    ctx.draw(&Line::new(
-        0.2 * state.width,
-        0.8 * state.height,
-        0.5 * state.width,
-        0.1 * state.height,
-        state.ui_color,
-    ));
-}
-
-fn handle_input(event: Event) -> Input {
+fn translate_input(event: Event) -> Input {
     if let Event::Key(key) = event {
         // quit the game if ctrl+c or q pressed
         if key.code == KeyCode::Char('q')
@@ -241,10 +242,10 @@ fn handle_input(event: Event) -> Input {
         }
 
         let input = match key.code {
-            KeyCode::Up => Input::Up,
-            KeyCode::Down => Input::Down,
-            KeyCode::Left => Input::Left,
-            KeyCode::Right => Input::Right,
+            KeyCode::Up | KeyCode::Char('w') => Input::Up,
+            KeyCode::Down | KeyCode::Char('s') => Input::Down,
+            KeyCode::Left | KeyCode::Char('a') => Input::Left,
+            KeyCode::Right | KeyCode::Char('d') => Input::Right,
             _ => Input::None,
         };
 

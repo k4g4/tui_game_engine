@@ -7,7 +7,10 @@ use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
-    widgets::{Block, BorderType, Borders},
+    widgets::{
+        canvas::{Canvas, Line},
+        Block, BorderType, Borders,
+    },
     Terminal,
 };
 use std::{io, ops::RangeInclusive, time::Duration};
@@ -19,6 +22,7 @@ const FPS_BOUNDS: RangeInclusive<u32> = 1..=10;
 /// Configuration settings for the game.
 pub struct Config {
     title: String,
+    ui_color: (u8, u8, u8),
     bg_color: (u8, u8, u8),
     fps: u32,
 }
@@ -37,7 +41,12 @@ pub enum GameError {
 }
 
 impl Config {
-    pub fn new(title: String, bg_color: (u8, u8, u8), fps: u32) -> Result<Self, GameError> {
+    pub fn new(
+        title: String,
+        ui_color: (u8, u8, u8),
+        bg_color: (u8, u8, u8),
+        fps: u32,
+    ) -> Result<Self, GameError> {
         if !FPS_BOUNDS.contains(&fps) {
             return Err(GameError::BadArg(format!(
                 "fps must be between {} and {}",
@@ -46,7 +55,12 @@ impl Config {
             )));
         }
 
-        Ok(Self { title, bg_color, fps })
+        Ok(Self {
+            title,
+            ui_color,
+            bg_color,
+            fps,
+        })
     }
 }
 
@@ -114,18 +128,48 @@ pub async fn init(config: Config) -> Result<(), GameError> {
     let mut stream = crossterm::event::EventStream::new();
     let sleep_duration = Duration::from_secs_f32(1_f32 / config.fps as f32);
 
-    let color = Color::Rgb(config.bg_color.0, config.bg_color.1, config.bg_color.2);
-    let game_widget = Block::default()
+    fn get_color(color: (u8, u8, u8)) -> Color {
+        Color::Rgb(color.0, color.1, color.2)
+    }
+    let ui_color = get_color(config.ui_color);
+    let bg_color = get_color(config.bg_color);
+
+    let game_border = Block::default()
         .title(format!(" {} ", config.title))
-        .title_style(Style::default().add_modifier(Modifier::BOLD))
+        .title_style(Style::default().add_modifier(Modifier::BOLD).fg(ui_color))
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
-        .style(Style::default().bg(color));
+        .border_style(Style::default().fg(ui_color))
+        .style(Style::default().bg(bg_color));
+
+    // some math to determine coords for each x and y
+    let Rect { width, height, .. } = terminal.size()?;
+
+    let get_x = |x: f64| -> f64 { x * width as f64 };
+
+    let get_y = |y: f64| -> f64 { y * height as f64 };
+
+    let canvas_template = Canvas::default()
+        .block(game_border)
+        .background_color(bg_color)
+        .marker(Marker::Block)
+        .x_bounds([0f64, width as f64])
+        .y_bounds([0f64, height as f64]);
 
     loop {
         terminal.draw(|frame| {
-            frame.render_widget(game_widget.clone(), frame.size());
+            let canvas = canvas_template.clone().paint(|ctx| {
+                ctx.print(get_x(0.5), get_y(0.5), "foobar".fg(ui_color).bold());
+                ctx.draw(&Line {
+                    x1: get_x(0.2),
+                    y1: get_y(0.8),
+                    x2: get_x(0.5),
+                    y2: get_y(0.1),
+                    color: ui_color,
+                });
+            });
+            frame.render_widget(canvas, frame.size());
         })?;
 
         // future returns every single sleep_duration, and a key press might be returned
@@ -134,7 +178,11 @@ pub async fn init(config: Config) -> Result<(), GameError> {
             time::sleep(sleep_duration)
         ) {
             if let Event::Key(key) = result? {
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                // quit the game if ctrl+c or q pressed
+                if key.code == KeyCode::Char('q')
+                    || (key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c'))
+                {
                     return Ok(());
                 }
 

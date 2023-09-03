@@ -2,8 +2,8 @@ use anyhow::Context;
 use clap::Parser;
 
 const TITLE: &str = "Snake";
-const UI_COLOR: (u8, u8, u8) = (20, 20, 20);
-const BG_COLOR: (u8, u8, u8) = (145, 230, 255);
+const UI_COLOR: &str = "#000000";
+const BG_COLOR: &str = "#439155";
 const DEFAULT_FPS: u32 = 5;
 
 #[derive(Parser)]

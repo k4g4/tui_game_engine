@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -7,13 +7,15 @@ use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
+    style::ParseColorError,
+    text::Line as TextLine,
     widgets::{
-        canvas::{Canvas, Line},
+        canvas::{Canvas, Context, Line},
         Block, BorderType, Borders,
     },
     Terminal,
 };
-use std::{io, ops::RangeInclusive, time::Duration};
+use std::{cell::RefCell, io, ops::RangeInclusive, rc::Rc, time::Duration};
 use thiserror::Error;
 use tokio::{join, time};
 
@@ -22,8 +24,8 @@ const FPS_BOUNDS: RangeInclusive<u32> = 1..=10;
 /// Configuration settings for the game.
 pub struct Config {
     title: String,
-    ui_color: (u8, u8, u8),
-    bg_color: (u8, u8, u8),
+    ui_color: &'static str,
+    bg_color: &'static str,
     fps: u32,
 }
 
@@ -33,8 +35,11 @@ pub enum GameError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
-    #[error("bad argument: {}", .0)]
-    BadArg(String),
+    #[error(transparent)]
+    InvalidColor(#[from] ParseColorError),
+
+    #[error("invalid argument: {}", .0)]
+    InvalidArg(String),
 
     #[error("unknown error")]
     Unknown,
@@ -43,12 +48,12 @@ pub enum GameError {
 impl Config {
     pub fn new(
         title: String,
-        ui_color: (u8, u8, u8),
-        bg_color: (u8, u8, u8),
+        ui_color: &'static str,
+        bg_color: &'static str,
         fps: u32,
     ) -> Result<Self, GameError> {
         if !FPS_BOUNDS.contains(&fps) {
-            return Err(GameError::BadArg(format!(
+            return Err(GameError::InvalidArg(format!(
                 "fps must be between {} and {}",
                 FPS_BOUNDS.start(),
                 FPS_BOUNDS.end()
@@ -64,11 +69,9 @@ impl Config {
     }
 }
 
-struct RenderHandle {
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
-}
+struct TerminalHandle(Terminal<CrosstermBackend<io::Stdout>>);
 
-impl RenderHandle {
+impl TerminalHandle {
     fn new() -> Result<Self, GameError> {
         // need to make sure disable_raw_mode is always called if any error occurs
 
@@ -91,24 +94,44 @@ impl RenderHandle {
             }
         };
 
-        Ok(Self { terminal })
+        Ok(Self(terminal))
     }
 }
 
-impl Drop for RenderHandle {
+impl Drop for TerminalHandle {
     fn drop(&mut self) {
         // RAII guard to ensure terminal settings reset
 
         disable_raw_mode().expect("raw mode enabled, so it should disable");
 
         execute!(
-            self.terminal.backend_mut(),
+            self.0.backend_mut(),
             LeaveAlternateScreen,
             DisableMouseCapture
         )
         .expect("leaving alt screen and disabling mouse capture");
 
-        self.terminal.show_cursor().expect("showing cursor");
+        self.0.show_cursor().expect("showing cursor");
+    }
+}
+
+trait Entity {}
+
+struct State {
+    width: f64,
+    height: f64,
+    ui_color: Color,
+    entities: Vec<Box<dyn Entity>>,
+}
+
+impl State {
+    fn new(width: f64, height: f64, ui_color: Color) -> Self {
+        Self {
+            width,
+            height,
+            ui_color,
+            entities: vec![],
+        }
     }
 }
 
@@ -118,21 +141,27 @@ enum Input {
     Down,
     Left,
     Right,
+    Quit,
 }
 
 /// Begin rendering the game using the provided `config` settings.
 pub async fn init(config: Config) -> Result<(), GameError> {
-    let mut handle = RenderHandle::new()?;
-    let terminal = &mut handle.terminal;
+    let mut handle = TerminalHandle::new()?;
+    let terminal = &mut handle.0;
 
-    let mut stream = crossterm::event::EventStream::new();
+    let mut stream = EventStream::new();
+
     let sleep_duration = Duration::from_secs_f32(1_f32 / config.fps as f32);
 
-    fn get_color(color: (u8, u8, u8)) -> Color {
-        Color::Rgb(color.0, color.1, color.2)
-    }
-    let ui_color = get_color(config.ui_color);
-    let bg_color = get_color(config.bg_color);
+    let ui_color = config.ui_color.parse()?;
+    let bg_color = config.bg_color.parse()?;
+
+    let Rect { width, height, .. } = terminal.size()?;
+    let state = Rc::new(RefCell::new(State::new(
+        width as f64,
+        height as f64,
+        ui_color,
+    )));
 
     let game_border = Block::default()
         .title(format!(" {} ", config.title))
@@ -142,13 +171,6 @@ pub async fn init(config: Config) -> Result<(), GameError> {
         .border_type(BorderType::Thick)
         .border_style(Style::default().fg(ui_color))
         .style(Style::default().bg(bg_color));
-
-    // some math to determine coords for each x and y
-    let Rect { width, height, .. } = terminal.size()?;
-
-    let get_x = |x: f64| -> f64 { x * width as f64 };
-
-    let get_y = |y: f64| -> f64 { y * height as f64 };
 
     let canvas_template = Canvas::default()
         .block(game_border)
@@ -160,14 +182,7 @@ pub async fn init(config: Config) -> Result<(), GameError> {
     loop {
         terminal.draw(|frame| {
             let canvas = canvas_template.clone().paint(|ctx| {
-                ctx.print(get_x(0.5), get_y(0.5), "foobar".fg(ui_color).bold());
-                ctx.draw(&Line {
-                    x1: get_x(0.2),
-                    y1: get_y(0.8),
-                    x2: get_x(0.5),
-                    y2: get_y(0.1),
-                    color: ui_color,
-                });
+                render_frame(ctx, state.clone());
             });
             frame.render_widget(canvas, frame.size());
         })?;
@@ -177,25 +192,58 @@ pub async fn init(config: Config) -> Result<(), GameError> {
             time::timeout(sleep_duration, stream.next()),
             time::sleep(sleep_duration)
         ) {
-            if let Event::Key(key) = result? {
-                // quit the game if ctrl+c or q pressed
-                if key.code == KeyCode::Char('q')
-                    || (key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c'))
-                {
-                    return Ok(());
-                }
-
-                let _input = match key.code {
-                    KeyCode::Up => Input::Up,
-                    KeyCode::Down => Input::Down,
-                    KeyCode::Left => Input::Left,
-                    KeyCode::Right => Input::Right,
-                    _ => Input::None,
-                };
+            match handle_input(result?) {
+                Input::Quit => break,
+                _ => {}
             }
+            struct Thing;
+            impl Entity for Thing {}
+            state.borrow_mut().entities.push(Box::new(Thing));
         }
     }
+
+    Ok(())
+}
+
+fn render_frame(ctx: &mut Context, state: Rc<RefCell<State>>) {
+    let state = state.borrow();
+    let text = format!("Entities: {}", state.entities.len());
+
+    ctx.print(
+        0.5 * state.width,
+        0.5 * state.height,
+        TextLine::styled(text, Style::default().fg(state.ui_color).bold()),
+    );
+    ctx.draw(&Line::new(
+        0.2 * state.width,
+        0.8 * state.height,
+        0.5 * state.width,
+        0.1 * state.height,
+        state.ui_color,
+    ));
+}
+
+fn handle_input(event: Event) -> Input {
+    if let Event::Key(key) = event {
+        // quit the game if ctrl+c or q pressed
+        if key.code == KeyCode::Char('q')
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+        {
+            return Input::Quit;
+        }
+
+        let input = match key.code {
+            KeyCode::Up => Input::Up,
+            KeyCode::Down => Input::Down,
+            KeyCode::Left => Input::Left,
+            KeyCode::Right => Input::Right,
+            _ => Input::None,
+        };
+
+        return input;
+    }
+
+    Input::None
 }
 
 #[cfg(test)]

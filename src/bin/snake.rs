@@ -12,8 +12,7 @@ struct Cli {
     fps: Option<u32>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = game::Config::new(
         TITLE.into(),
@@ -23,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .context("parsing command line arguments")?;
 
-    game::init(config).await.context("rendering snake game")?;
+    game::init(config).context("rendering snake game")?;
 
     Ok(())
 }

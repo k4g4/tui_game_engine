@@ -1,9 +1,8 @@
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
@@ -15,9 +14,16 @@ use ratatui::{
     },
     Terminal,
 };
-use std::{cell::RefCell, io, ops::RangeInclusive, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    io,
+    ops::RangeInclusive,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 use thiserror::Error;
-use tokio::{join, time};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=10;
 
@@ -145,11 +151,9 @@ enum Input {
 }
 
 /// Begin rendering the game using the provided `config` settings.
-pub async fn init(config: Config) -> Result<(), GameError> {
+pub fn init(config: Config) -> Result<(), GameError> {
     let mut handle = TerminalHandle::new()?;
     let terminal = &mut handle.0;
-
-    let mut stream = EventStream::new();
 
     let sleep_duration = Duration::from_secs_f32(1_f32 / config.fps as f32);
 
@@ -179,6 +183,13 @@ pub async fn init(config: Config) -> Result<(), GameError> {
         .x_bounds([0f64, width as f64])
         .y_bounds([0f64, height as f64]);
 
+    let recent_input = Arc::new(Mutex::new(Input::None));
+
+    let write_to_recent_input = recent_input.clone();
+    thread::spawn(move || loop {
+        *write_to_recent_input.lock().unwrap() = handle_input(crossterm::event::read().unwrap());
+    });
+
     loop {
         terminal.draw(|frame| {
             let canvas = canvas_template.clone().paint(|ctx| {
@@ -187,19 +198,16 @@ pub async fn init(config: Config) -> Result<(), GameError> {
             frame.render_widget(canvas, frame.size());
         })?;
 
-        // future returns every single sleep_duration, and a key press might be returned
-        if let (Ok(Some(result)), _) = join!(
-            time::timeout(sleep_duration, stream.next()),
-            time::sleep(sleep_duration)
-        ) {
-            match handle_input(result?) {
-                Input::Quit => break,
-                _ => {}
-            }
-            struct Thing;
-            impl Entity for Thing {}
-            state.borrow_mut().entities.push(Box::new(Thing));
+        thread::sleep(sleep_duration);
+
+        match *recent_input.lock().expect("not poisoned") {
+            Input::Quit => break,
+            _ => {}
         }
+        
+        struct Thing;
+        impl Entity for Thing {}
+        state.borrow_mut().entities.push(Box::new(Thing));
     }
 
     Ok(())

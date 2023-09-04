@@ -24,7 +24,7 @@ use std::{
 use thiserror::Error;
 
 mod entity;
-use entity::{Entity, Line, Point, Rectangle, TextBox};
+use entity::Entity;
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 

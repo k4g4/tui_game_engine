@@ -4,7 +4,7 @@ use clap::Parser;
 const TITLE: &str = "Snake";
 const UI_COLOR: &str = "#000000";
 const BG_COLOR: &str = "#439155";
-const DEFAULT_FPS: u32 = 5;
+const DEFAULT_FPS: u32 = 20;
 
 #[derive(Parser)]
 struct Cli {

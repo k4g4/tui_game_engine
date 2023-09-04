@@ -7,14 +7,16 @@ use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
     style::ParseColorError,
-    widgets::{canvas::Canvas, Block, BorderType, Borders},
+    widgets::{
+        canvas::{Canvas, Painter},
+        Block, BorderType, Borders,
+    },
     Terminal,
 };
 use std::{
     cell::RefCell,
     io,
     ops::RangeInclusive,
-    rc::Rc,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -22,9 +24,9 @@ use std::{
 use thiserror::Error;
 
 mod entity;
-use entity::{Entity, Line, Point, TextBox};
+use entity::{Entity, Line, Point, Rectangle, TextBox};
 
-const FPS_BOUNDS: RangeInclusive<u32> = 1..=10;
+const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 
 /// Configuration settings for the game.
 pub struct Config {
@@ -131,11 +133,11 @@ pub enum Input {
     Quit,
 }
 
-struct State {
+pub struct State {
     width: f64,
     height: f64,
     ui_color: Color,
-    entities: Vec<Box<dyn Entity>>,
+    entities: RefCell<Vec<Box<dyn Entity>>>,
 }
 
 impl State {
@@ -144,7 +146,7 @@ impl State {
             width,
             height,
             ui_color,
-            entities: vec![],
+            entities: RefCell::new(vec![]),
         }
     }
 }
@@ -160,11 +162,6 @@ pub fn init(config: Config) -> Result<(), GameError> {
     let bg_color = config.bg_color.parse()?;
 
     let Rect { width, height, .. } = terminal.size()?;
-    let state = Rc::new(RefCell::new(State::new(
-        width as f64,
-        height as f64,
-        ui_color,
-    )));
 
     let game_border = Block::default()
         .title(format!(" {} ", config.title))
@@ -175,12 +172,12 @@ pub fn init(config: Config) -> Result<(), GameError> {
         .border_style(Style::default().fg(ui_color))
         .style(Style::default().bg(bg_color));
 
-    let canvas_template = Canvas::default()
+    let canvas = Canvas::default()
         .block(game_border)
         .background_color(bg_color)
         .marker(Marker::Block)
-        .x_bounds([0f64, width as f64])
-        .y_bounds([0f64, height as f64]);
+        .x_bounds([0.0, width as f64])
+        .y_bounds([0.0, height as f64]);
 
     let input = Arc::new(Mutex::new(Input::None));
 
@@ -192,24 +189,18 @@ pub fn init(config: Config) -> Result<(), GameError> {
         });
     }
 
+    let state = State::new(width as f64, height as f64, ui_color);
     {
-        let entities = &mut state.borrow_mut().entities;
-        entities.push(Box::new(Line::new(
-            (Point::new(10f64, 10f64), Point::new(25f64, 25f64)),
-            ui_color,
-        )));
-        entities.push(Box::new(TextBox::new(
-            "Hello, world!".into(),
-            Point::new(20f64, 20f64),
-            Style::default().fg(ui_color),
-        )));
+        let entities = &mut state.entities.borrow_mut();
+        
     }
 
     loop {
         terminal.draw(|frame| {
-            let canvas = canvas_template.clone().paint(|ctx| {
-                for entity in &state.borrow().entities {
-                    entity.render(ctx);
+            let canvas = canvas.clone().paint(|ctx| {
+                let painter = Painter::from(ctx);
+                for entity in state.entities.borrow().as_slice() {
+                    entity.render(&mut painter);
                 }
             });
             frame.render_widget(canvas, frame.size());
@@ -221,8 +212,8 @@ pub fn init(config: Config) -> Result<(), GameError> {
         match *input {
             Input::Quit => break,
             input => {
-                for entity in &mut state.borrow_mut().entities {
-                    entity.handle_input(input);
+                for entity in &mut *state.entities.borrow_mut() {
+                    entity.update(input, &state);
                 }
             }
         }
@@ -233,26 +224,24 @@ pub fn init(config: Config) -> Result<(), GameError> {
 }
 
 fn translate_input(event: Event) -> Input {
-    if let Event::Key(key) = event {
-        // quit the game if ctrl+c or q pressed
-        if key.code == KeyCode::Char('q')
-            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
-        {
-            return Input::Quit;
-        }
+    let Event::Key(key) = event else {
+        return Input::None;
+    };
 
-        let input = match key.code {
-            KeyCode::Up | KeyCode::Char('w') => Input::Up,
-            KeyCode::Down | KeyCode::Char('s') => Input::Down,
-            KeyCode::Left | KeyCode::Char('a') => Input::Left,
-            KeyCode::Right | KeyCode::Char('d') => Input::Right,
-            _ => Input::None,
-        };
-
-        return input;
+    // quit the game if ctrl+c or q pressed
+    if key.code == KeyCode::Char('q')
+        || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+    {
+        return Input::Quit;
     }
 
-    Input::None
+    match key.code {
+        KeyCode::Up | KeyCode::Char('w') => Input::Up,
+        KeyCode::Down | KeyCode::Char('s') => Input::Down,
+        KeyCode::Left | KeyCode::Char('a') => Input::Left,
+        KeyCode::Right | KeyCode::Char('d') => Input::Right,
+        _ => Input::None,
+    }
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tracing::{instrument, debug};
 
 mod entity;
 use entity::Entity;
@@ -29,6 +30,7 @@ use entity::Entity;
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 
 /// Configuration settings for the game.
+#[derive(Debug)]
 pub struct Config {
     title: String,
     ui_color: &'static str,
@@ -101,6 +103,8 @@ impl TerminalHandle {
             }
         };
 
+        debug!("terminal handle constructed");
+
         Ok(Self(terminal))
     }
 }
@@ -119,6 +123,8 @@ impl Drop for TerminalHandle {
         .expect("leaving alt screen and disabling mouse capture");
 
         self.0.show_cursor().expect("showing cursor");
+
+        debug!("terminal handle dropped");
     }
 }
 
@@ -134,24 +140,19 @@ pub enum Input {
 }
 
 pub struct State {
-    width: f64,
-    height: f64,
-    ui_color: Color,
     entities: RefCell<Vec<Box<dyn Entity>>>,
 }
 
 impl State {
-    fn new(width: f64, height: f64, ui_color: Color) -> Self {
+    fn new() -> Self {
         Self {
-            width,
-            height,
-            ui_color,
             entities: RefCell::new(vec![]),
         }
     }
 }
 
 /// Begin rendering the game using the provided `config` settings.
+#[instrument]
 pub fn init(config: Config) -> Result<(), GameError> {
     let mut handle = TerminalHandle::new()?;
     let terminal = &mut handle.0;
@@ -183,22 +184,23 @@ pub fn init(config: Config) -> Result<(), GameError> {
 
     // separate thread reads keyboard and updates the current input
     {
+        debug!("creating input reading thread");
+
         let input = input.clone();
         thread::spawn(move || loop {
-            *input.lock().unwrap() = translate_input(crossterm::event::read().unwrap());
+            *input.lock().unwrap() = read_input();
         });
     }
 
-    let state = State::new(width as f64, height as f64, ui_color);
+    let state = State::new();
     {
-        let entities = &mut state.entities.borrow_mut();
-        
+        let _entities = &mut state.entities.borrow_mut();
     }
 
     loop {
         terminal.draw(|frame| {
             let canvas = canvas.clone().paint(|ctx| {
-                let painter = Painter::from(ctx);
+                let mut painter = Painter::from(ctx);
                 for entity in state.entities.borrow().as_slice() {
                     entity.render(&mut painter);
                 }
@@ -220,11 +222,13 @@ pub fn init(config: Config) -> Result<(), GameError> {
         *input = Input::None;
     }
 
+    debug!("game loop terminated");
+
     Ok(())
 }
 
-fn translate_input(event: Event) -> Input {
-    let Event::Key(key) = event else {
+fn read_input() -> Input {
+    let Event::Key(key) = crossterm::event::read().expect("reading event") else {
         return Input::None;
     };
 

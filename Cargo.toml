@@ -14,3 +14,5 @@ crossterm = { version = "0.27.0", features = ["event-stream"] }
 futures = "0.3.28"
 ratatui = "0.23.0"
 thiserror = "1.0.47"
+tracing = "0.1.37"
+tracing-subscriber = "0.3.17"

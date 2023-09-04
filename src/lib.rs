@@ -22,7 +22,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-use tracing::{instrument, debug};
+use tracing::{debug, instrument};
 
 mod entity;
 use entity::Entity;

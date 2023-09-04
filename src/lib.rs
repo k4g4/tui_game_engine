@@ -15,8 +15,9 @@ use ratatui::{
 };
 use std::{
     cell::RefCell,
+    collections::HashMap,
     io,
-    ops::RangeInclusive,
+    ops::{AddAssign, RangeInclusive},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -24,8 +25,8 @@ use std::{
 use thiserror::Error;
 use tracing::{debug, instrument};
 
-mod entity;
-use entity::Entity;
+pub mod entity;
+use entity::{Entity, Input, Update, Vector};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 
@@ -36,6 +37,33 @@ pub struct Config {
     ui_color: &'static str,
     bg_color: &'static str,
     fps: u32,
+    entities: Vec<Box<dyn Entity>>,
+}
+
+impl Config {
+    pub fn new(
+        title: String,
+        ui_color: &'static str,
+        bg_color: &'static str,
+        fps: u32,
+        entities: Vec<Box<dyn Entity>>,
+    ) -> Result<Self, GameError> {
+        if !FPS_BOUNDS.contains(&fps) {
+            return Err(GameError::InvalidArg(format!(
+                "fps must be between {} and {}",
+                FPS_BOUNDS.start(),
+                FPS_BOUNDS.end()
+            )));
+        }
+
+        Ok(Self {
+            title,
+            ui_color,
+            bg_color,
+            fps,
+            entities,
+        })
+    }
 }
 
 /// Error returned from the game.
@@ -54,27 +82,41 @@ pub enum GameError {
     Unknown,
 }
 
-impl Config {
-    pub fn new(
-        title: String,
-        ui_color: &'static str,
-        bg_color: &'static str,
-        fps: u32,
-    ) -> Result<Self, GameError> {
-        if !FPS_BOUNDS.contains(&fps) {
-            return Err(GameError::InvalidArg(format!(
-                "fps must be between {} and {}",
-                FPS_BOUNDS.start(),
-                FPS_BOUNDS.end()
-            )));
-        }
+#[derive(Copy, Clone, Debug)]
+struct Position {
+    x: usize,
+    y: usize,
+}
 
-        Ok(Self {
-            title,
-            ui_color,
-            bg_color,
-            fps,
-        })
+impl AddAssign<Vector> for Position {
+    fn add_assign(&mut self, rhs: Vector) {
+        self.x += rhs.x as usize;
+        self.y += rhs.y as usize;
+    }
+}
+
+struct EntityState {
+    pos: Position,
+    entity: Box<dyn Entity>,
+}
+
+struct State {
+    next_id: u32,
+    entity_states: HashMap<u32, RefCell<EntityState>>,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            next_id: 0,
+            entity_states: HashMap::new(),
+        }
+    }
+
+    fn add_entity(&mut self, entity: Box<dyn Entity>, pos: Position) {
+        self.entity_states
+            .insert(self.next_id, RefCell::new(EntityState { pos, entity }));
+        self.next_id += 1;
     }
 }
 
@@ -128,29 +170,6 @@ impl Drop for TerminalHandle {
     }
 }
 
-/// Input received from the player.
-#[derive(Clone, Copy)]
-pub enum Input {
-    None,
-    Up,
-    Down,
-    Left,
-    Right,
-    Quit,
-}
-
-pub struct State {
-    entities: RefCell<Vec<Box<dyn Entity>>>,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            entities: RefCell::new(vec![]),
-        }
-    }
-}
-
 /// Begin rendering the game using the provided `config` settings.
 #[instrument]
 pub fn init(config: Config) -> Result<(), GameError> {
@@ -192,17 +211,31 @@ pub fn init(config: Config) -> Result<(), GameError> {
         });
     }
 
-    let state = State::new();
-    {
-        let _entities = &mut state.entities.borrow_mut();
+    let mut state = State::new();
+    for entity in config.entities {
+        state.add_entity(entity, Position { x: 10, y: 10 });
     }
 
     loop {
         terminal.draw(|frame| {
             let canvas = canvas.clone().paint(|ctx| {
                 let mut painter = Painter::from(ctx);
-                for entity in state.entities.borrow().as_slice() {
-                    entity.render(&mut painter);
+                for entity_state in state.entity_states.values() {
+                    let entity_state = entity_state.borrow();
+                    let pos = entity_state.pos;
+                    let sprite = entity_state.entity.sprite();
+
+                    for x in 0..sprite.width() {
+                        for y in 0..sprite.height() {
+                            let rgb = sprite.get_pixel_color(x, y);
+
+                            let (x, y) = painter
+                                .get_point((pos.x + x as usize) as f64, (pos.y + y as usize) as f64)
+                                .expect("within bounds");
+
+                            painter.paint(x, y, Color::Rgb(rgb.0, rgb.1, rgb.2));
+                        }
+                    }
                 }
             });
             frame.render_widget(canvas, frame.size());
@@ -214,8 +247,15 @@ pub fn init(config: Config) -> Result<(), GameError> {
         match *input {
             Input::Quit => break,
             input => {
-                for entity in &mut *state.entities.borrow_mut() {
-                    entity.update(input, &state);
+                // each entity updates itself based on current input
+                for entity_state in state.entity_states.values() {
+                    let mut entity_state = entity_state.borrow_mut();
+                    match entity_state.entity.update(input) {
+                        Update::Move(vector) => {
+                            entity_state.pos += vector;
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

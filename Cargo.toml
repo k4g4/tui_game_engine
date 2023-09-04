@@ -9,6 +9,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75"
+bmp = "0.5.0"
 clap = { version = "4.4.2", features = ["derive"] }
 crossterm = { version = "0.27.0", features = ["event-stream"] }
 futures = "0.3.28"

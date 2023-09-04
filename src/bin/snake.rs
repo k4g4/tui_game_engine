@@ -1,21 +1,25 @@
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use std::{fs::File, path::PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 use tracing::Level;
 
-use game::entity::{Entity, Sprite, Update, Input};
+use game::entity::{Entity, Input, Sprite, Update};
 
 const TITLE: &str = "Snake";
 const UI_COLOR: &str = "#000000";
 const BG_COLOR: &str = "#439155";
 
-const DEFAULT_FPS: u32 = 1;
-const DEFAULT_LOG: &str = "snake.log";
-
-const LOG_DIR: &str = "logs/";
+const LOG_DIR: &str = "logs";
 const LOG_LEVEL: Level = Level::DEBUG;
 
-const SMILEY_BMP: &str = "bmps/smiley.bmp";
+const BMPS_DIR: &str = "bmps";
+const SMILEY_BMP: &str = "smiley.bmp";
+
+const DEFAULT_FPS: u32 = 1;
+const DEFAULT_LOG: &str = "snake.log";
 
 #[derive(Parser)]
 #[command(name = "Snake")]
@@ -27,11 +31,12 @@ struct Cli {
     log: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
-
+    
+    // log to the specified log file, or default to LOG_DIR/DEFAULT_LOG
     let log_path =
-        PathBuf::from(LOG_DIR).join(cli.log.file_name().ok_or(anyhow!("invalid log filename"))?);
+        Path::new(LOG_DIR).join(cli.log.file_name().ok_or(anyhow!("invalid log filename"))?);
     let log = File::create(&log_path)
         .context("while creating log file")
         .or_else(|_| {
@@ -43,17 +48,6 @@ fn main() -> anyhow::Result<()> {
         .with_max_level(LOG_LEVEL)
         .pretty()
         .init();
-
-    let smiley = {
-        let img = bmp::open(SMILEY_BMP)?;
-        let (height, width) = (img.get_height(), img.get_width());
-        let mut bytes = Vec::with_capacity(
-            std::mem::size_of::<bmp::Pixel>() * height as usize * width as usize,
-        );
-        img.to_writer(&mut bytes)?;
-
-        Sprite::new(height, width, &bytes)
-    };
 
     #[derive(Debug)]
     struct Player(Sprite);
@@ -68,16 +62,38 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let smiley_path = [BMPS_DIR, SMILEY_BMP].iter().collect::<PathBuf>();
+    let player = Player(get_sprite(&smiley_path)?);
+
     let config = game::Config::new(
         TITLE.into(),
         UI_COLOR,
         BG_COLOR,
         cli.fps,
-        vec![Box::new(Player(smiley))],
+        vec![Box::new(player)],
     )
     .context("while parsing command line arguments")?;
 
-    game::init(config).context("while rendering snake game")?;
-
+    if let Err(error) = game::init(config).context("while rendering snake game") {
+        // since the terminal has been hijacked, print errors to the log
+        tracing::debug!("Error: {:?}", error);
+        return Err(error);
+    }
+    
     Ok(())
+}
+
+fn get_sprite(path: &Path) -> Result<Sprite> {
+    let img = bmp::open(path)?;
+    let (width, height) = (img.get_width(), img.get_height());
+
+    let mut bytes =
+        Vec::with_capacity(std::mem::size_of::<bmp::Pixel>() * height as usize * width as usize);
+    bytes.extend(
+        img.coordinates()
+            .map(|(x, y)| img.get_pixel(x, height - y - 1))
+            .flat_map(|pixel| [pixel.r, pixel.g, pixel.b]),
+    );
+
+    Ok(Sprite::new(width, height, &bytes))
 }

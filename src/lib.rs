@@ -8,7 +8,7 @@ use ratatui::{
     prelude::*,
     style::ParseColorError,
     widgets::{
-        canvas::{Canvas, Painter},
+        canvas::{Canvas, Painter, Context},
         Block, BorderType, Borders,
     },
     Terminal,
@@ -219,25 +219,10 @@ pub fn init(config: Config) -> Result<(), GameError> {
     loop {
         terminal.draw(|frame| {
             let canvas = canvas.clone().paint(|ctx| {
-                let mut painter = Painter::from(ctx);
-                for entity_state in state.entity_states.values() {
-                    let entity_state = entity_state.borrow();
-                    let pos = entity_state.pos;
-                    let sprite = entity_state.entity.sprite();
-
-                    for x in 0..sprite.width() {
-                        for y in 0..sprite.height() {
-                            let rgb = sprite.get_pixel_color(x, y);
-
-                            let (x, y) = painter
-                                .get_point((pos.x + x as usize) as f64, (pos.y + y as usize) as f64)
-                                .expect("within bounds");
-
-                            painter.paint(x, y, Color::Rgb(rgb.0, rgb.1, rgb.2));
-                        }
-                    }
-                }
+                render_entities(ctx, &state);
+                ctx.layer();
             });
+
             frame.render_widget(canvas, frame.size());
         })?;
 
@@ -285,6 +270,29 @@ fn read_input() -> Input {
         KeyCode::Left | KeyCode::Char('a') => Input::Left,
         KeyCode::Right | KeyCode::Char('d') => Input::Right,
         _ => Input::None,
+    }
+}
+
+fn render_entities(ctx: &mut Context, state: &State) {
+    let mut painter = Painter::from(ctx);
+
+    for entity_state in state.entity_states.values() {
+        let entity_state = entity_state.borrow();
+        let pos = entity_state.pos;
+        let sprite = entity_state.entity.sprite();
+
+        for x in 0..sprite.width() {
+            for y in 0..sprite.height() {
+                let rgb = sprite.get_pixel_color(x, y);
+                //debug!(x, y, red = rgb.0, green = rgb.1, blue = rgb.2);
+
+                let (x, y) = painter
+                    .get_point((pos.x + x as usize) as f64, (pos.y + y as usize) as f64)
+                    .expect("within bounds");
+
+                painter.paint(x, y, Color::Rgb(rgb.0, rgb.1, rgb.2));
+            }
+        }
     }
 }
 

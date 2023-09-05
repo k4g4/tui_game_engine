@@ -21,6 +21,7 @@ const LOG_LEVEL: Level = Level::DEBUG;
 
 const BMPS_DIR: &str = "bmps";
 const SMILEY_BMP: &str = "smiley.bmp";
+const MEANIE_BMP: &str = "meanie.bmp";
 
 const DEFAULT_FPS: u32 = 15;
 const DEFAULT_LOG: &str = "snake.log";
@@ -33,6 +34,78 @@ struct Cli {
 
     #[arg(long, default_value=DEFAULT_LOG)]
     log: PathBuf,
+}
+
+#[derive(Debug)]
+struct Player((f32, f32), Rc<Sprite>, i32);
+
+impl Entity for Player {
+    fn start_pos(&self) -> (f32, f32) {
+        self.0
+    }
+
+    fn update(&mut self, input: Input) -> Update {
+        if self.2 <= 0 {
+            return Update::Destroy;
+        }
+
+        match input {
+            Input::Up => Update::Move(Vector::new(0, 2)),
+            Input::Down => Update::Move(Vector::new(0, -2)),
+            Input::Left => Update::Move(Vector::new(-2, 0)),
+            Input::Right => Update::Move(Vector::new(2, 0)),
+            _ => Update::None,
+        }
+    }
+
+    fn sprite(&self) -> &Rc<Sprite> {
+        &self.1
+    }
+
+    fn collision(&mut self, other: &mut Box<dyn Entity>) {
+        other.effect(Effect::Damage(10));
+    }
+
+    fn effect(&mut self, effect: Effect) {
+        match effect {
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Enemy((f32, f32), Rc<Sprite>, i32);
+
+impl Entity for Enemy {
+    fn start_pos(&self) -> (f32, f32) {
+        self.0
+    }
+
+    fn update(&mut self, input: Input) -> Update {
+        if self.2 <= 0 {
+            return Update::Destroy;
+        }
+
+        match input {
+            _ => Update::None,
+        }
+    }
+
+    fn sprite(&self) -> &Rc<Sprite> {
+        &self.1
+    }
+
+    fn collision(&mut self, _other: &mut Box<dyn Entity>) {
+        
+    }
+
+    fn effect(&mut self, effect: Effect) {
+        match effect {
+            Effect::Damage(damage) => {
+                self.2 -= damage;
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -53,61 +126,27 @@ fn main() -> Result<()> {
         .pretty()
         .init();
 
-    #[derive(Debug)]
-    struct Player((f32, f32), Rc<Sprite>, i32);
-
-    impl Entity for Player {
-        fn start_pos(&self) -> (f32, f32) {
-            self.0
-        }
-
-        fn update(&mut self, input: Input) -> Update {
-            if self.2 <= 0 {
-                return Update::Destroy;
-            }
-
-            match input {
-                Input::Up => Update::Move(Vector::new(0, 2)),
-                Input::Down => Update::Move(Vector::new(0, -2)),
-                Input::Left => Update::Move(Vector::new(-2, 0)),
-                Input::Right => Update::Move(Vector::new(2, 0)),
-                _ => Update::None,
-            }
-        }
-
-        fn sprite(&self) -> &Rc<Sprite> {
-            &self.1
-        }
-
-        fn collision(&mut self, other: &mut Box<dyn Entity>) {
-            other.effect(Effect::Damage(10));
-        }
-
-        fn effect(&mut self, effect: Effect) {
-            match effect {
-                Effect::Damage(damage) => {
-                    self.2 -= damage;
-                }
-            }
-        }
-    }
-
     let smiley_path = [BMPS_DIR, SMILEY_BMP].iter().collect::<PathBuf>();
     let smiley = Rc::new(get_sprite(&smiley_path)?);
 
-    let players: Vec<_> = [
+    let meanie_path = [BMPS_DIR, MEANIE_BMP].iter().collect::<PathBuf>();
+    let meanie = Rc::new(get_sprite(&meanie_path)?);
+
+    let mut entities: Vec<_> = [
         (0.2, 0.2),
         (0.5, 0.2),
         (0.8, 0.2),
-        (0.2, 0.7),
-        (0.5, 0.7),
-        (0.8, 0.7),
+        (0.2, 0.8),
+        (0.5, 0.8),
+        (0.8, 0.8),
     ]
     .into_iter()
-    .map(|pos| Box::new(Player(pos, smiley.clone(), 5)) as Box<dyn Entity>)
+    .map(|pos| Box::new(Enemy(pos, meanie.clone(), 5)) as Box<dyn Entity>)
     .collect();
 
-    let config = Config::new(TITLE.into(), UI_COLOR, BG_COLOR, cli.fps, players)
+    entities.push(Box::new(Player((0.5, 0.5), smiley.clone(), 10)));
+
+    let config = Config::new(TITLE.into(), UI_COLOR, BG_COLOR, cli.fps, entities)
         .context("while parsing command line arguments")?;
 
     if let Err(error) = game::init(config).context("while rendering snake game") {

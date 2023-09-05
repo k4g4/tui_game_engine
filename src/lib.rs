@@ -114,10 +114,10 @@ struct EntityState {
 
 impl EntityState {
     fn overlaps(&self, other: &Self) -> bool {
-        self.pos.x > other.pos.x + ((other.sprite.width() as i32 - 2) * X_SCALE)
-            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) < other.pos.x
-            && self.pos.y > other.pos.y + ((other.sprite.height() as i32 - 2) * Y_SCALE)
-            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) < other.pos.y
+        self.pos.x <= other.pos.x + ((other.sprite.width() as i32 - 2) * X_SCALE)
+            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) >= other.pos.x
+            && self.pos.y <= other.pos.y + ((other.sprite.height() as i32 - 2) * Y_SCALE)
+            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) >= other.pos.y
     }
 
     fn within_bounds(&self, bounds: Rect) -> bool {

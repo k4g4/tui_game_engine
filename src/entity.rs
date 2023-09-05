@@ -1,5 +1,7 @@
-use crate::GameError;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::{
+    fmt::{self, Debug, Formatter},
+    rc::Rc,
+};
 
 /// Input received from the player.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -30,6 +32,12 @@ pub enum Update {
     #[default]
     None,
     Move(Vector),
+    Destroy,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Effect {
+    Damage(i32),
 }
 
 /// A game entity's sprite used for rendering.
@@ -70,7 +78,7 @@ impl Sprite {
 }
 
 impl Debug for Sprite {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sprite")
             .field("height", &self.height)
             .field("width", &self.width)
@@ -83,14 +91,15 @@ pub trait Entity: Debug {
     /// Starting position for the entity, between [0, 1).
     fn start_pos(&self) -> (f32, f32);
 
-    /// Update the entity for this game tick.
-    fn update(&mut self, input: Input) -> Result<Update, GameError>;
-
     /// Get the entity's sprite.
-    fn sprite(&self) -> &Sprite;
+    fn sprite(&self) -> &Rc<Sprite>;
 
-    /// Get entity's hitbox dimensions.
-    fn dimensions(&self) -> (u32, u32) {
-        (self.sprite().width, self.sprite().height)
-    }
+    /// Update the entity for this game tick.
+    fn update(&mut self, input: Input) -> Update;
+
+    /// Respond to a collision with another entity.
+    fn collision(&mut self, other: &mut Box<dyn Entity>);
+
+    /// Respond to an effect.
+    fn effect(&mut self, effect: Effect);
 }

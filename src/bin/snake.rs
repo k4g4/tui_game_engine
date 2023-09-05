@@ -8,8 +8,8 @@ use std::{
 use tracing::Level;
 
 use game::{
-    entity::{Entity, Input, Sprite, Update, Vector},
-    GameError,
+    entity::{Effect, Entity, Input, Sprite, Update, Vector},
+    Config,
 };
 
 const TITLE: &str = "Snake";
@@ -54,41 +54,61 @@ fn main() -> Result<()> {
         .init();
 
     #[derive(Debug)]
-    struct Player(Rc<Sprite>);
+    struct Player((f32, f32), Rc<Sprite>, i32);
 
     impl Entity for Player {
         fn start_pos(&self) -> (f32, f32) {
-            (0.5, 0.5)
+            self.0
         }
 
-        fn update(&mut self, input: Input) -> Result<Update, GameError> {
-            Ok(match input {
+        fn update(&mut self, input: Input) -> Update {
+            if self.2 <= 0 {
+                return Update::Destroy;
+            }
+
+            match input {
                 Input::Up => Update::Move(Vector::new(0, 2)),
                 Input::Down => Update::Move(Vector::new(0, -2)),
                 Input::Left => Update::Move(Vector::new(-2, 0)),
                 Input::Right => Update::Move(Vector::new(2, 0)),
                 _ => Update::None,
-            })
+            }
         }
 
-        fn sprite(&self) -> &Sprite {
-            &self.0
+        fn sprite(&self) -> &Rc<Sprite> {
+            &self.1
+        }
+
+        fn collision(&mut self, other: &mut Box<dyn Entity>) {
+            other.effect(Effect::Damage(10));
+        }
+
+        fn effect(&mut self, effect: Effect) {
+            match effect {
+                Effect::Damage(damage) => {
+                    self.2 -= damage;
+                }
+            }
         }
     }
 
     let smiley_path = [BMPS_DIR, SMILEY_BMP].iter().collect::<PathBuf>();
     let smiley = Rc::new(get_sprite(&smiley_path)?);
 
-    let player = Player(smiley.clone());
+    let players: Vec<_> = [
+        (0.2, 0.2),
+        (0.5, 0.2),
+        (0.8, 0.2),
+        (0.2, 0.7),
+        (0.5, 0.7),
+        (0.8, 0.7),
+    ]
+    .into_iter()
+    .map(|pos| Box::new(Player(pos, smiley.clone(), 5)) as Box<dyn Entity>)
+    .collect();
 
-    let config = game::Config::new(
-        TITLE.into(),
-        UI_COLOR,
-        BG_COLOR,
-        cli.fps,
-        vec![Box::new(player)],
-    )
-    .context("while parsing command line arguments")?;
+    let config = Config::new(TITLE.into(), UI_COLOR, BG_COLOR, cli.fps, players)
+        .context("while parsing command line arguments")?;
 
     if let Err(error) = game::init(config).context("while rendering snake game") {
         // since the terminal has been hijacked, print errors to the log

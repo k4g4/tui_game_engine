@@ -17,7 +17,8 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     io,
-    ops::{Add, RangeInclusive},
+    ops::{AddAssign, RangeInclusive},
+    rc::Rc,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -26,7 +27,7 @@ use thiserror::Error;
 use tracing::{debug, instrument};
 
 pub mod entity;
-use entity::{Entity, Input, Update, Vector};
+use entity::{Entity, Input, Sprite, Update, Vector};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 
@@ -98,26 +99,39 @@ struct Position {
     y: i32,
 }
 
-impl Add<Vector> for Position {
-    type Output = Self;
-
-    fn add(self, rhs: Vector) -> Self::Output {
-        Self::Output {
-            x: self.x + (rhs.x * X_SCALE),
-            y: self.y + (rhs.y * Y_SCALE),
-        }
+impl AddAssign<Vector> for Position {
+    fn add_assign(&mut self, rhs: Vector) {
+        self.x += rhs.x * X_SCALE;
+        self.y += rhs.y * Y_SCALE;
     }
 }
 
 struct EntityState {
     pos: Position,
-    entity: Box<dyn Entity>,
+    sprite: Rc<Sprite>,
+    entity: Option<Box<dyn Entity>>,
+}
+
+impl EntityState {
+    fn overlaps(&self, other: &Self) -> bool {
+        self.pos.x > other.pos.x + ((other.sprite.width() as i32 - 2) * X_SCALE)
+            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) < other.pos.x
+            && self.pos.y > other.pos.y + ((other.sprite.height() as i32 - 2) * Y_SCALE)
+            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) < other.pos.y
+    }
+
+    fn within_bounds(&self, bounds: Rect) -> bool {
+        self.pos.x > bounds.left() as i32 + 1
+            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) < bounds.right() as i32 - 1
+            && self.pos.y >= bounds.top() as i32
+            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) < bounds.bottom() as i32
+    }
 }
 
 struct State {
     bounds: Rect,
     next_id: u32,
-    entity_states: HashMap<u32, RefCell<EntityState>>,
+    entity_states: RefCell<HashMap<u32, RefCell<EntityState>>>,
 }
 
 impl State {
@@ -125,14 +139,31 @@ impl State {
         Self {
             bounds,
             next_id: 0,
-            entity_states: HashMap::new(),
+            entity_states: RefCell::new(HashMap::new()),
         }
     }
 
-    fn add_entity(&mut self, entity: Box<dyn Entity>, pos: Position) {
+    fn add_entity(
+        &mut self,
+        entity: Box<dyn Entity>,
+        sprite: Rc<Sprite>,
+        pos: Position,
+    ) -> Result<(), GameError> {
+        let entity_state = EntityState {
+            pos,
+            sprite,
+            entity: Some(entity),
+        };
+        if !entity_state.within_bounds(self.bounds) {
+            return Err(GameError::OutOfBounds);
+        }
+
         self.entity_states
-            .insert(self.next_id, RefCell::new(EntityState { pos, entity }));
+            .borrow_mut()
+            .insert(self.next_id, RefCell::new(entity_state));
         self.next_id += 1;
+
+        Ok(())
     }
 }
 
@@ -186,13 +217,6 @@ impl Drop for TerminalHandle {
     }
 }
 
-fn within_bounds(bounds: Rect, pos: Position, width: u32, height: u32) -> bool {
-    pos.x > bounds.left() as i32
-        && pos.x + ((width as i32 - 2) * X_SCALE) < bounds.right() as i32
-        && pos.y >= bounds.top() as i32
-        && pos.y + ((height as i32 - 2) * Y_SCALE) < bounds.bottom() as i32
-}
-
 /// Begin rendering the game using the provided `config` settings.
 #[instrument]
 pub fn init(config: Config) -> Result<(), GameError> {
@@ -238,7 +262,8 @@ pub fn init(config: Config) -> Result<(), GameError> {
 
     for entity in config.entities {
         let (x, y) = entity.start_pos();
-        let (width, height) = entity.dimensions();
+        let sprite = entity.sprite().clone();
+        let (width, height) = (sprite.width(), sprite.height());
 
         // Position is the provided x/y positions times the screen width/height.
         // Subtract half the entity's width/height so position is middle of entity.
@@ -248,12 +273,8 @@ pub fn init(config: Config) -> Result<(), GameError> {
             y: (((bounds.bottom() - bounds.top()) as f32 * y)
                 - ((height * Y_SCALE as u32) as f32 / 2.0)) as i32,
         };
-        
-        if !within_bounds(bounds, pos, width, height) {
-            return Err(GameError::OutOfBounds);
-        }
 
-        state.add_entity(entity, pos);
+        state.add_entity(entity, sprite, pos)?;
     }
 
     let maybe_error = RefCell::new(None);
@@ -282,6 +303,12 @@ pub fn init(config: Config) -> Result<(), GameError> {
         }
         update_entities(*input, &state)?;
         *input = Input::None;
+
+        // some entities may have been destroyed
+        state
+            .entity_states
+            .borrow_mut()
+            .retain(|_, entity_state| entity_state.borrow().entity.is_some());
     }
 }
 
@@ -309,10 +336,10 @@ fn read_input() -> Input {
 fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
     let mut painter = Painter::from(ctx);
 
-    for entity_state in state.entity_states.values() {
+    for entity_state in state.entity_states.borrow().values() {
         let entity_state = entity_state.borrow();
         let pos = entity_state.pos;
-        let sprite = entity_state.entity.sprite();
+        let sprite = &entity_state.sprite;
 
         for x in 0..sprite.width() {
             for y in 0..sprite.height() {
@@ -340,19 +367,48 @@ fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
 }
 
 fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
-    for entity_state in state.entity_states.values() {
+    for (&key, entity_state) in &*state.entity_states.borrow() {
         let mut entity_state = entity_state.borrow_mut();
 
-        match entity_state.entity.update(input)? {
-            Update::Move(vector) => {
-                let new_pos = entity_state.pos + vector;
-                let (width, height) = entity_state.entity.dimensions();
-
-                if within_bounds(state.bounds, new_pos, width, height) {
-                    entity_state.pos = new_pos;
+        // Get mut borrows for all other entity states. The run-time borrow checking
+        // will pass because even though entity_state has been mut borrowed already,
+        // its key is used to filter it out from the iter.
+        for mut other_entity_state in state
+            .entity_states
+            .borrow()
+            .iter()
+            .filter(|(&other_key, _)| other_key != key)
+            .map(|(_, entity_state)| entity_state.borrow_mut())
+        {
+            if entity_state.overlaps(&other_entity_state) {
+                if let Some(entity) = entity_state.entity.as_mut() {
+                    if let Some(other_entity) = other_entity_state.entity.as_mut() {
+                        entity.collision(other_entity);
+                    }
                 }
             }
-            _ => {}
+        }
+
+        let update = if let Some(entity) = entity_state.entity.as_mut() {
+            entity.update(input)
+        } else {
+            Update::None
+        };
+        match update {
+            Update::Move(vector) => {
+                let old_pos = entity_state.pos;
+                entity_state.pos += vector;
+
+                if !entity_state.within_bounds(state.bounds) {
+                    entity_state.pos = old_pos;
+                }
+            }
+
+            Update::Destroy => {
+                entity_state.entity = None;
+            }
+
+            Update::None => {}
         }
     }
 

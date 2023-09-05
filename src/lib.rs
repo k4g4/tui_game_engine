@@ -76,7 +76,7 @@ pub enum GameError {
     #[error("error while updating entity: {}", .0)]
     UpdateError(String),
 
-    #[error("sprite rendered out of bounds")]
+    #[error("entity rendered out of bounds")]
     OutOfBounds,
 
     #[error(transparent)]
@@ -186,6 +186,13 @@ impl Drop for TerminalHandle {
     }
 }
 
+fn within_bounds(bounds: Rect, pos: Position, width: u32, height: u32) -> bool {
+    pos.x > bounds.left() as i32
+        && pos.x + ((width as i32 - 2) * X_SCALE) < bounds.right() as i32
+        && pos.y >= bounds.top() as i32
+        && pos.y + ((height as i32 - 2) * Y_SCALE) < bounds.bottom() as i32
+}
+
 /// Begin rendering the game using the provided `config` settings.
 #[instrument]
 pub fn init(config: Config) -> Result<(), GameError> {
@@ -228,8 +235,25 @@ pub fn init(config: Config) -> Result<(), GameError> {
     }
 
     let mut state = State::new(bounds);
+
     for entity in config.entities {
-        state.add_entity(entity, Position { x: 10, y: 10 });
+        let (x, y) = entity.start_pos();
+        let (width, height) = entity.dimensions();
+
+        // Position is the provided x/y positions times the screen width/height.
+        // Subtract half the entity's width/height so position is middle of entity.
+        let pos = Position {
+            x: (((bounds.right() - bounds.left()) as f32 * x)
+                - ((width * X_SCALE as u32) as f32 / 2.0)) as i32,
+            y: (((bounds.bottom() - bounds.top()) as f32 * y)
+                - ((height * Y_SCALE as u32) as f32 / 2.0)) as i32,
+        };
+        
+        if !within_bounds(bounds, pos, width, height) {
+            return Err(GameError::OutOfBounds);
+        }
+
+        state.add_entity(entity, pos);
     }
 
     let maybe_error = RefCell::new(None);
@@ -310,11 +334,6 @@ fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
                 }
             }
         }
-
-        // uncomment to show pos of entity
-        // if let Some((x, y)) = painter.get_point(pos.x as f64, pos.y as f64) {
-        //     painter.paint(x, y, Color::Magenta);
-        // }
     }
 
     Ok(())
@@ -329,11 +348,7 @@ fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
                 let new_pos = entity_state.pos + vector;
                 let (width, height) = entity_state.entity.dimensions();
 
-                if new_pos.x >= state.bounds.left() as i32 + 1
-                    && new_pos.x + ((width as i32 - 2) * X_SCALE) < state.bounds.right() as i32
-                    && new_pos.y >= state.bounds.top() as i32
-                    && new_pos.y + ((height as i32 - 2) * Y_SCALE) < state.bounds.bottom() as i32
-                {
+                if within_bounds(state.bounds, new_pos, width, height) {
                     entity_state.pos = new_pos;
                 }
             }

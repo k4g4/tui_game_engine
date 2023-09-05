@@ -3,6 +3,7 @@ use clap::Parser;
 use std::{
     fs::File,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use tracing::Level;
 
@@ -21,7 +22,7 @@ const LOG_LEVEL: Level = Level::DEBUG;
 const BMPS_DIR: &str = "bmps";
 const SMILEY_BMP: &str = "smiley.bmp";
 
-const DEFAULT_FPS: u32 = 10;
+const DEFAULT_FPS: u32 = 15;
 const DEFAULT_LOG: &str = "snake.log";
 
 #[derive(Parser)]
@@ -53,9 +54,13 @@ fn main() -> Result<()> {
         .init();
 
     #[derive(Debug)]
-    struct Player(Sprite);
+    struct Player(Rc<Sprite>);
 
     impl Entity for Player {
+        fn start_pos(&self) -> (f32, f32) {
+            (0.5, 0.5)
+        }
+
         fn update(&mut self, input: Input) -> Result<Update, GameError> {
             Ok(match input {
                 Input::Up => Update::Move(Vector::new(0, 2)),
@@ -72,7 +77,9 @@ fn main() -> Result<()> {
     }
 
     let smiley_path = [BMPS_DIR, SMILEY_BMP].iter().collect::<PathBuf>();
-    let player = Player(get_sprite(&smiley_path)?);
+    let smiley = Rc::new(get_sprite(&smiley_path)?);
+
+    let player = Player(smiley.clone());
 
     let config = game::Config::new(
         TITLE.into(),

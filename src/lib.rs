@@ -30,6 +30,9 @@ use entity::{Entity, Input, Update, Vector};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
 
+const X_SCALE: i32 = 2; // compensate for squished sprites
+const Y_SCALE: i32 = 1;
+
 /// Configuration settings for the game.
 #[derive(Debug)]
 pub struct Config {
@@ -100,8 +103,8 @@ impl Add<Vector> for Position {
 
     fn add(self, rhs: Vector) -> Self::Output {
         Self::Output {
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
+            x: self.x + (rhs.x * X_SCALE),
+            y: self.y + (rhs.y * Y_SCALE),
         }
     }
 }
@@ -189,7 +192,7 @@ pub fn init(config: Config) -> Result<(), GameError> {
     let mut handle = TerminalHandle::new()?;
     let terminal = &mut handle.0;
 
-    let sleep_duration = Duration::from_secs_f32(1_f32 / config.fps as f32);
+    let sleep_duration = Duration::from_secs_f32(1.0 / config.fps as f32);
 
     let ui_color = config.ui_color.parse()?;
     let bg_color = config.bg_color.parse()?;
@@ -292,18 +295,26 @@ fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
                 let rgb = sprite.get_pixel_color(x, y);
                 let color = Color::Rgb(rgb.0, rgb.1, rgb.2);
 
-                let (x, y) = painter
-                    .get_point((pos.x + x as i32) as f64, (pos.y + y as i32) as f64)
+                let (x_offset, y_offset) = painter
+                    .get_point(
+                        (pos.x + (x as i32 * X_SCALE)) as f64,
+                        (pos.y + (y as i32 * Y_SCALE)) as f64,
+                    )
                     .ok_or(GameError::OutOfBounds)?;
 
-                // sprites will look squished unless each x is drawn twice
-                painter.paint(x * 2, y, color);
-                painter.paint(x * 2 - 1, y, color);
+                // sprites will look squished unless scaling factor is accounted for
+                for x in 0..X_SCALE {
+                    for y in 0..Y_SCALE {
+                        painter.paint(x_offset - x as usize, y_offset - y as usize, color);
+                    }
+                }
             }
         }
-        if let Some((x, y)) = painter.get_point(pos.x as f64, pos.y as f64) {
-            painter.paint(x, y, Color::Magenta);
-        }
+
+        // uncomment to show pos of entity
+        // if let Some((x, y)) = painter.get_point(pos.x as f64, pos.y as f64) {
+        //     painter.paint(x, y, Color::Magenta);
+        // }
     }
 
     Ok(())
@@ -316,10 +327,12 @@ fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
         match entity_state.entity.update(input)? {
             Update::Move(vector) => {
                 let new_pos = entity_state.pos + vector;
-                if new_pos.x >= 1
-                    && new_pos.x < state.bounds.width as i32
-                    && new_pos.y >= 0
-                    && new_pos.y < state.bounds.height as i32
+                let (width, height) = entity_state.entity.dimensions();
+
+                if new_pos.x >= state.bounds.left() as i32 + 1
+                    && new_pos.x + ((width as i32 - 2) * X_SCALE) < state.bounds.right() as i32
+                    && new_pos.y >= state.bounds.top() as i32
+                    && new_pos.y + ((height as i32 - 2) * Y_SCALE) < state.bounds.bottom() as i32
                 {
                     entity_state.pos = new_pos;
                 }

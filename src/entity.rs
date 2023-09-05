@@ -84,4 +84,8 @@ pub trait Entity: Debug {
     fn update(&mut self, input: Input) -> Result<Update, GameError>;
     /// Get the entity's sprite.
     fn sprite(&self) -> &Sprite;
+    /// Get entity's hitbox dimensions.
+    fn dimensions(&self) -> (u32, u32) {
+        (self.sprite().width, self.sprite().height)
+    }
 }

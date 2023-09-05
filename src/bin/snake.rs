@@ -6,7 +6,10 @@ use std::{
 };
 use tracing::Level;
 
-use game::entity::{Entity, Input, Sprite, Update};
+use game::{
+    entity::{Entity, Input, Sprite, Update, Vector},
+    GameError,
+};
 
 const TITLE: &str = "Snake";
 const UI_COLOR: &str = "#000000";
@@ -18,7 +21,7 @@ const LOG_LEVEL: Level = Level::DEBUG;
 const BMPS_DIR: &str = "bmps";
 const SMILEY_BMP: &str = "smiley.bmp";
 
-const DEFAULT_FPS: u32 = 1;
+const DEFAULT_FPS: u32 = 10;
 const DEFAULT_LOG: &str = "snake.log";
 
 #[derive(Parser)]
@@ -33,7 +36,7 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     // log to the specified log file, or default to LOG_DIR/DEFAULT_LOG
     let log_path =
         Path::new(LOG_DIR).join(cli.log.file_name().ok_or(anyhow!("invalid log filename"))?);
@@ -53,8 +56,14 @@ fn main() -> Result<()> {
     struct Player(Sprite);
 
     impl Entity for Player {
-        fn update(&mut self, _input: Input) -> Update {
-            Update::default()
+        fn update(&mut self, input: Input) -> Result<Update, GameError> {
+            Ok(match input {
+                Input::Up => Update::Move(Vector::new(0, 2)),
+                Input::Down => Update::Move(Vector::new(0, -2)),
+                Input::Left => Update::Move(Vector::new(-2, 0)),
+                Input::Right => Update::Move(Vector::new(2, 0)),
+                _ => Update::None,
+            })
         }
 
         fn sprite(&self) -> &Sprite {
@@ -79,7 +88,7 @@ fn main() -> Result<()> {
         tracing::debug!("Error: {:?}", error);
         return Err(error);
     }
-    
+
     Ok(())
 }
 

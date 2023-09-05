@@ -1,7 +1,8 @@
-use std::fmt::{Debug, Formatter, Result};
+use crate::GameError;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 /// Input received from the player.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Input {
     None,
     Up,
@@ -12,14 +13,14 @@ pub enum Input {
 }
 
 /// Used for entities to specify movements/directions.
-#[derive(Copy, Clone, Default, Debug)]
+#[derive(Copy, Clone, Default, Debug, PartialEq)]
 pub struct Vector {
-    pub x: u32,
-    pub y: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Vector {
-    pub fn new(x: u32, y: u32) -> Self {
+    pub fn new(x: i32, y: i32) -> Self {
         Self { x, y }
     }
 }
@@ -54,7 +55,7 @@ impl Sprite {
             pixels,
         }
     }
-    
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -69,7 +70,7 @@ impl Sprite {
 }
 
 impl Debug for Sprite {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("Sprite")
             .field("height", &self.height)
             .field("width", &self.width)
@@ -80,7 +81,7 @@ impl Debug for Sprite {
 /// A game entity of some kind.
 pub trait Entity: Debug {
     /// Update the entity for this game tick.
-    fn update(&mut self, input: Input) -> Update;
+    fn update(&mut self, input: Input) -> Result<Update, GameError>;
     /// Get the entity's sprite.
     fn sprite(&self) -> &Sprite;
 }

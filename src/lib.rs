@@ -8,7 +8,7 @@ use ratatui::{
     prelude::*,
     style::ParseColorError,
     widgets::{
-        canvas::{Canvas, Painter, Context},
+        canvas::{Canvas, Context, Painter},
         Block, BorderType, Borders,
     },
     Terminal,
@@ -17,7 +17,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     io,
-    ops::{AddAssign, RangeInclusive},
+    ops::{Add, RangeInclusive},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -67,8 +67,15 @@ impl Config {
 }
 
 /// Error returned from the game.
+/// Use UpdateError when `update` is called on an `Entity`.
 #[derive(Error, Debug)]
 pub enum GameError {
+    #[error("error while updating entity: {}", .0)]
+    UpdateError(String),
+
+    #[error("sprite rendered out of bounds")]
+    OutOfBounds,
+
     #[error(transparent)]
     Io(#[from] io::Error),
 
@@ -84,14 +91,18 @@ pub enum GameError {
 
 #[derive(Copy, Clone, Debug)]
 struct Position {
-    x: usize,
-    y: usize,
+    x: i32,
+    y: i32,
 }
 
-impl AddAssign<Vector> for Position {
-    fn add_assign(&mut self, rhs: Vector) {
-        self.x += rhs.x as usize;
-        self.y += rhs.y as usize;
+impl Add<Vector> for Position {
+    type Output = Self;
+
+    fn add(self, rhs: Vector) -> Self::Output {
+        Self::Output {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
     }
 }
 
@@ -101,13 +112,15 @@ struct EntityState {
 }
 
 struct State {
+    bounds: Rect,
     next_id: u32,
     entity_states: HashMap<u32, RefCell<EntityState>>,
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(bounds: Rect) -> Self {
         Self {
+            bounds,
             next_id: 0,
             entity_states: HashMap::new(),
         }
@@ -181,7 +194,7 @@ pub fn init(config: Config) -> Result<(), GameError> {
     let ui_color = config.ui_color.parse()?;
     let bg_color = config.bg_color.parse()?;
 
-    let Rect { width, height, .. } = terminal.size()?;
+    let bounds = terminal.size()?;
 
     let game_border = Block::default()
         .title(format!(" {} ", config.title))
@@ -196,8 +209,8 @@ pub fn init(config: Config) -> Result<(), GameError> {
         .block(game_border)
         .background_color(bg_color)
         .marker(Marker::Block)
-        .x_bounds([0.0, width as f64])
-        .y_bounds([0.0, height as f64]);
+        .x_bounds([0.0, bounds.width as f64])
+        .y_bounds([0.0, bounds.height as f64]);
 
     let input = Arc::new(Mutex::new(Input::None));
 
@@ -211,45 +224,38 @@ pub fn init(config: Config) -> Result<(), GameError> {
         });
     }
 
-    let mut state = State::new();
+    let mut state = State::new(bounds);
     for entity in config.entities {
         state.add_entity(entity, Position { x: 10, y: 10 });
     }
 
+    let maybe_error = RefCell::new(None);
     loop {
         terminal.draw(|frame| {
             let canvas = canvas.clone().paint(|ctx| {
-                render_entities(ctx, &state);
+                // render the entities, and hold onto any errors for outside the closures
+                if let Err(error) = render_entities(ctx, &state) {
+                    *maybe_error.borrow_mut() = Some(error);
+                }
+
                 ctx.layer();
             });
 
             frame.render_widget(canvas, frame.size());
         })?;
+        if let Some(error) = maybe_error.borrow_mut().take() {
+            return Err(error);
+        }
 
         thread::sleep(sleep_duration);
 
         let mut input = input.lock().expect("not poisoned");
-        match *input {
-            Input::Quit => break,
-            input => {
-                // each entity updates itself based on current input
-                for entity_state in state.entity_states.values() {
-                    let mut entity_state = entity_state.borrow_mut();
-                    match entity_state.entity.update(input) {
-                        Update::Move(vector) => {
-                            entity_state.pos += vector;
-                        }
-                        _ => {}
-                    }
-                }
-            }
+        if *input == Input::Quit {
+            return Ok(());
         }
+        update_entities(*input, &state)?;
         *input = Input::None;
     }
-
-    debug!("game loop terminated");
-
-    Ok(())
 }
 
 fn read_input() -> Input {
@@ -273,7 +279,7 @@ fn read_input() -> Input {
     }
 }
 
-fn render_entities(ctx: &mut Context, state: &State) {
+fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
     let mut painter = Painter::from(ctx);
 
     for entity_state in state.entity_states.values() {
@@ -284,16 +290,45 @@ fn render_entities(ctx: &mut Context, state: &State) {
         for x in 0..sprite.width() {
             for y in 0..sprite.height() {
                 let rgb = sprite.get_pixel_color(x, y);
-                //debug!(x, y, red = rgb.0, green = rgb.1, blue = rgb.2);
+                let color = Color::Rgb(rgb.0, rgb.1, rgb.2);
 
                 let (x, y) = painter
-                    .get_point((pos.x + x as usize) as f64, (pos.y + y as usize) as f64)
-                    .expect("within bounds");
+                    .get_point((pos.x + x as i32) as f64, (pos.y + y as i32) as f64)
+                    .ok_or(GameError::OutOfBounds)?;
 
-                painter.paint(x, y, Color::Rgb(rgb.0, rgb.1, rgb.2));
+                // sprites will look squished unless each x is drawn twice
+                painter.paint(x * 2, y, color);
+                painter.paint(x * 2 - 1, y, color);
             }
         }
+        if let Some((x, y)) = painter.get_point(pos.x as f64, pos.y as f64) {
+            painter.paint(x, y, Color::Magenta);
+        }
     }
+
+    Ok(())
+}
+
+fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
+    for entity_state in state.entity_states.values() {
+        let mut entity_state = entity_state.borrow_mut();
+
+        match entity_state.entity.update(input)? {
+            Update::Move(vector) => {
+                let new_pos = entity_state.pos + vector;
+                if new_pos.x >= 1
+                    && new_pos.x < state.bounds.width as i32
+                    && new_pos.y >= 0
+                    && new_pos.y < state.bounds.height as i32
+                {
+                    entity_state.pos = new_pos;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

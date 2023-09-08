@@ -29,46 +29,14 @@ use tracing::{debug, instrument};
 pub mod entity;
 use entity::{Entity, Input, Sprite, Update, Vector};
 
-const FPS_BOUNDS: RangeInclusive<u32> = 1..=20;
+const FPS_BOUNDS: RangeInclusive<u32> = 1..=30;
+const DEFAULT_FPS: u32 = 15;
+const DEFAULT_TITLE: &str = "Game";
+const DEFAULT_UI_COLOR: &str = "#000000";
+const DEFAULT_BG_COLOR: &str = "#666666";
 
 const X_SCALE: i32 = 2; // compensate for squished sprites
 const Y_SCALE: i32 = 1;
-
-/// Configuration settings for the game.
-#[derive(Debug)]
-pub struct Config {
-    title: String,
-    ui_color: &'static str,
-    bg_color: &'static str,
-    fps: u32,
-    entities: Vec<Box<dyn Entity>>,
-}
-
-impl Config {
-    pub fn new(
-        title: String,
-        ui_color: &'static str,
-        bg_color: &'static str,
-        fps: u32,
-        entities: Vec<Box<dyn Entity>>,
-    ) -> Result<Self, GameError> {
-        if !FPS_BOUNDS.contains(&fps) {
-            return Err(GameError::InvalidArg(format!(
-                "fps must be between {} and {}",
-                FPS_BOUNDS.start(),
-                FPS_BOUNDS.end()
-            )));
-        }
-
-        Ok(Self {
-            title,
-            ui_color,
-            bg_color,
-            fps,
-            entities,
-        })
-    }
-}
 
 /// Error returned from the game.
 /// Use UpdateError when `update` is called on an `Entity`.
@@ -82,6 +50,9 @@ pub enum GameError {
 
     #[error(transparent)]
     Io(#[from] io::Error),
+
+    #[error(transparent)]
+    Bmp(#[from] bmp::BmpError),
 
     #[error(transparent)]
     InvalidColor(#[from] ParseColorError),
@@ -106,62 +77,105 @@ impl AddAssign<Vector> for Position {
     }
 }
 
+#[derive(Debug)]
 struct EntityState {
-    pos: Position,
+    pos: Option<Position>,
     sprite: Rc<Sprite>,
     entity: Option<Box<dyn Entity>>,
 }
 
 impl EntityState {
     fn overlaps(&self, other: &Self) -> bool {
-        self.pos.x <= other.pos.x + ((other.sprite.width() as i32 - 2) * X_SCALE)
-            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) >= other.pos.x
-            && self.pos.y <= other.pos.y + ((other.sprite.height() as i32 - 2) * Y_SCALE)
-            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) >= other.pos.y
+        let Position {
+            x: self_x,
+            y: self_y,
+        } = self.pos.expect("self has a position");
+        let Position {
+            x: other_x,
+            y: other_y,
+        } = other.pos.expect("other has a position");
+
+        self_x <= other_x + ((other.sprite.width() as i32 - 2) * X_SCALE)
+            && self_x + ((self.sprite.width() as i32 - 2) * X_SCALE) >= other_x
+            && self_y <= other_y + ((other.sprite.height() as i32 - 2) * Y_SCALE)
+            && self_y + ((self.sprite.height() as i32 - 2) * Y_SCALE) >= other_y
     }
 
     fn within_bounds(&self, bounds: Rect) -> bool {
-        self.pos.x > bounds.left() as i32 + 1
-            && self.pos.x + ((self.sprite.width() as i32 - 2) * X_SCALE) < bounds.right() as i32 - 1
-            && self.pos.y >= bounds.top() as i32
-            && self.pos.y + ((self.sprite.height() as i32 - 2) * Y_SCALE) < bounds.bottom() as i32
+        let Position {
+            x: self_x,
+            y: self_y,
+        } = self.pos.expect("self has a position");
+
+        self_x > bounds.left() as i32 + 1
+            && self_x + ((self.sprite.width() as i32 - 2) * X_SCALE) < bounds.right() as i32 - 1
+            && self_y >= bounds.top() as i32
+            && self_y + ((self.sprite.height() as i32 - 2) * Y_SCALE) < bounds.bottom() as i32
     }
 }
 
+#[derive(Debug)]
 struct State {
-    bounds: Rect,
+    bounds: Option<Rect>,
     next_id: u32,
     entity_states: RefCell<HashMap<u32, RefCell<EntityState>>>,
 }
 
 impl State {
-    fn new(bounds: Rect) -> Self {
+    fn new() -> Self {
         Self {
-            bounds,
+            bounds: None,
             next_id: 0,
             entity_states: RefCell::new(HashMap::new()),
         }
     }
 
-    fn add_entity(
-        &mut self,
-        entity: Box<dyn Entity>,
-        sprite: Rc<Sprite>,
-        pos: Position,
-    ) -> Result<(), GameError> {
+    fn set_bounds(&mut self, bounds: Rect) {
+        self.bounds = Some(bounds);
+    }
+
+    fn add_entity(&mut self, entity: Box<dyn Entity>) {
+        let sprite = entity.sprite().clone();
+
         let entity_state = EntityState {
-            pos,
+            pos: None,
             sprite,
             entity: Some(entity),
         };
-        if !entity_state.within_bounds(self.bounds) {
-            return Err(GameError::OutOfBounds);
-        }
 
         self.entity_states
             .borrow_mut()
             .insert(self.next_id, RefCell::new(entity_state));
         self.next_id += 1;
+    }
+
+    fn set_starting_positions(&mut self) -> Result<(), GameError> {
+        let bounds = &self.bounds.expect("bounds should exist");
+
+        for entity_state in self.entity_states.borrow_mut().values() {
+            let mut entity_state = entity_state.borrow_mut();
+            let (x, y) = entity_state
+                .entity
+                .as_ref()
+                .expect("all entities should be Some")
+                .start_pos();
+            let sprite = &entity_state.sprite;
+
+            // Position is the provided x/y positions times the screen width/height.
+            // Subtract half the entity's width/height so position is middle of entity.
+            let pos = Position {
+                x: (((bounds.right() - bounds.left()) as f32 * x)
+                    - ((sprite.width() * X_SCALE as u32) as f32 / 2.0)) as i32,
+                y: (((bounds.bottom() - bounds.top()) as f32 * y)
+                    - ((sprite.height() * Y_SCALE as u32) as f32 / 2.0)) as i32,
+            };
+
+            if !entity_state.within_bounds(self.bounds.unwrap()) {
+                return Err(GameError::OutOfBounds);
+            }
+
+            entity_state.pos = Some(pos);
+        }
 
         Ok(())
     }
@@ -217,98 +231,136 @@ impl Drop for TerminalHandle {
     }
 }
 
-/// Begin rendering the game using the provided `config` settings.
-#[instrument]
-pub fn init(config: Config) -> Result<(), GameError> {
-    let mut handle = TerminalHandle::new()?;
-    let terminal = &mut handle.0;
+/// Game engine configuration builder.
+#[derive(Debug)]
+pub struct Engine {
+    state: State,
+    title: &'static str,
+    ui_color: &'static str,
+    bg_color: &'static str,
+    fps: u32,
+}
 
-    let sleep_duration = Duration::from_secs_f32(1.0 / config.fps as f32);
+impl Engine {
+    pub fn new() -> Self {
+        Self {
+            state: State::new(),
+            title: DEFAULT_TITLE,
+            ui_color: DEFAULT_UI_COLOR,
+            bg_color: DEFAULT_BG_COLOR,
+            fps: DEFAULT_FPS,
+        }
+    }
 
-    let ui_color = config.ui_color.parse()?;
-    let bg_color = config.bg_color.parse()?;
+    pub fn set_title(self, title: &'static str) -> Self {
+        Self {
+            title: title,
+            ..self
+        }
+    }
 
-    let bounds = terminal.size()?;
+    pub fn set_ui_color(self, ui_color: &'static str) -> Self {
+        Self { ui_color, ..self }
+    }
+    pub fn set_bg_color(self, bg_color: &'static str) -> Self {
+        Self { bg_color, ..self }
+    }
+    pub fn set_fps(self, fps: u32) -> Self {
+        Self { fps, ..self }
+    }
 
-    let game_border = Block::default()
-        .title(format!(" {} ", config.title))
-        .title_style(Style::default().add_modifier(Modifier::BOLD).fg(ui_color))
-        .title_alignment(Alignment::Center)
-        .borders(Borders::ALL)
-        .border_type(BorderType::Thick)
-        .border_style(Style::default().fg(ui_color))
-        .style(Style::default().bg(bg_color));
-
-    let canvas = Canvas::default()
-        .block(game_border)
-        .background_color(bg_color)
-        .marker(Marker::Block)
-        .x_bounds([0.0, bounds.width as f64])
-        .y_bounds([0.0, bounds.height as f64]);
-
-    let input = Arc::new(Mutex::new(Input::None));
-
-    // separate thread reads keyboard and updates the current input
+    pub fn starting_entities<T>(mut self, entities: T) -> Self
+    where
+        T: IntoIterator<Item = Box<dyn Entity>>,
     {
+        for entity in entities {
+            self.state.add_entity(entity);
+        }
+        self
+    }
+
+    /// Begin rendering the game using the provided `config` settings.
+    #[instrument]
+    pub fn init(mut self) -> Result<(), GameError> {
+        let mut handle = TerminalHandle::new()?;
+        let terminal = &mut handle.0;
+
+        if !FPS_BOUNDS.contains(&self.fps) {
+            return Err(GameError::InvalidArg(format!(
+                "fps must be between {} and {}",
+                FPS_BOUNDS.start(),
+                FPS_BOUNDS.end()
+            )));
+        }
+        let sleep_duration = Duration::from_secs_f32(1.0 / self.fps as f32);
+
+        let ui_color = self.ui_color.parse()?;
+        let bg_color = self.bg_color.parse()?;
+
+        self.state.set_bounds(terminal.size()?);
+        self.state.set_starting_positions()?;
+
+        let game_border = Block::default()
+            .title(format!(" {} ", self.title))
+            .title_style(Style::default().add_modifier(Modifier::BOLD).fg(ui_color))
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
+            .border_style(Style::default().fg(ui_color))
+            .style(Style::default().bg(bg_color));
+
+        let canvas = Canvas::default()
+            .block(game_border)
+            .background_color(bg_color)
+            .marker(Marker::Block)
+            .x_bounds([0.0, self.state.bounds.unwrap().width as f64])
+            .y_bounds([0.0, self.state.bounds.unwrap().height as f64]);
+
+        let input = Arc::new(Mutex::new(Input::None));
+
+        // separate thread reads keyboard and updates the current input
         debug!("creating input reading thread");
+        {
+            let input = input.clone();
 
-        let input = input.clone();
-        thread::spawn(move || loop {
-            *input.lock().unwrap() = read_input();
-        });
-    }
-
-    let mut state = State::new(bounds);
-
-    for entity in config.entities {
-        let (x, y) = entity.start_pos();
-        let sprite = entity.sprite().clone();
-        let (width, height) = (sprite.width(), sprite.height());
-
-        // Position is the provided x/y positions times the screen width/height.
-        // Subtract half the entity's width/height so position is middle of entity.
-        let pos = Position {
-            x: (((bounds.right() - bounds.left()) as f32 * x)
-                - ((width * X_SCALE as u32) as f32 / 2.0)) as i32,
-            y: (((bounds.bottom() - bounds.top()) as f32 * y)
-                - ((height * Y_SCALE as u32) as f32 / 2.0)) as i32,
-        };
-
-        state.add_entity(entity, sprite, pos)?;
-    }
-
-    let maybe_error = RefCell::new(None);
-    loop {
-        terminal.draw(|frame| {
-            let canvas = canvas.clone().paint(|ctx| {
-                // render the entities, and hold onto any errors for outside the closures
-                if let Err(error) = render_entities(ctx, &state) {
-                    *maybe_error.borrow_mut() = Some(error);
-                }
-
-                ctx.layer();
+            thread::spawn(move || loop {
+                *input.lock().unwrap() = read_input();
             });
-
-            frame.render_widget(canvas, frame.size());
-        })?;
-        if let Some(error) = maybe_error.borrow_mut().take() {
-            return Err(error);
         }
 
-        thread::sleep(sleep_duration);
+        let maybe_error = RefCell::new(None);
+        loop {
+            terminal.draw(|frame| {
+                let canvas = canvas.clone().paint(|ctx| {
+                    // render the entities, and hold onto any errors for outside the closures
+                    if let Err(error) = render_entities(ctx, &self.state) {
+                        *maybe_error.borrow_mut() = Some(error);
+                    }
 
-        let mut input = input.lock().expect("not poisoned");
-        if *input == Input::Quit {
-            return Ok(());
+                    ctx.layer();
+                });
+
+                frame.render_widget(canvas, frame.size());
+            })?;
+            if let Some(error) = maybe_error.borrow_mut().take() {
+                return Err(error);
+            }
+
+            thread::sleep(sleep_duration);
+
+            let mut input = input.lock().expect("not poisoned");
+            if *input == Input::Quit {
+                return Ok(());
+            }
+            update_entities(*input, &self.state)?;
+            *input = Input::None;
+
+            // some entities may have been destroyed
+            self.state
+                .entity_states
+                .borrow_mut()
+                .retain(|_, entity_state| entity_state.borrow().entity.is_some());
         }
-        update_entities(*input, &state)?;
-        *input = Input::None;
-
-        // some entities may have been destroyed
-        state
-            .entity_states
-            .borrow_mut()
-            .retain(|_, entity_state| entity_state.borrow().entity.is_some());
     }
 }
 
@@ -338,12 +390,12 @@ fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
 
     for entity_state in state.entity_states.borrow().values() {
         let entity_state = entity_state.borrow();
-        let pos = entity_state.pos;
+        let pos = entity_state.pos.expect("entity has a position");
         let sprite = &entity_state.sprite;
 
         for x in 0..sprite.width() {
             for y in 0..sprite.height() {
-                let rgb = sprite.get_pixel_color(x, y);
+                let rgb = sprite.get_pixel(x, y);
                 let color = Color::Rgb(rgb.0, rgb.1, rgb.2);
 
                 let (x_offset, y_offset) = painter
@@ -397,9 +449,9 @@ fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
         match update {
             Update::Move(vector) => {
                 let old_pos = entity_state.pos;
-                entity_state.pos += vector;
+                *entity_state.pos.as_mut().expect("entity has a position") += vector;
 
-                if !entity_state.within_bounds(state.bounds) {
+                if !entity_state.within_bounds(state.bounds.expect("bounds should exist")) {
                     entity_state.pos = old_pos;
                 }
             }

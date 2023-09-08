@@ -9,7 +9,7 @@ use tracing::Level;
 
 use game::{
     entity::{Effect, Entity, Input, Sprite, Update, Vector},
-    Config,
+    Engine,
 };
 
 const TITLE: &str = "Snake";
@@ -95,9 +95,7 @@ impl Entity for Enemy {
         &self.1
     }
 
-    fn collision(&mut self, _other: &mut Box<dyn Entity>) {
-        
-    }
+    fn collision(&mut self, _other: &mut Box<dyn Entity>) {}
 
     fn effect(&mut self, effect: Effect) {
         match effect {
@@ -126,11 +124,10 @@ fn main() -> Result<()> {
         .pretty()
         .init();
 
-    let smiley_path = [BMPS_DIR, SMILEY_BMP].iter().collect::<PathBuf>();
-    let smiley = Rc::new(get_sprite(&smiley_path)?);
-
-    let meanie_path = [BMPS_DIR, MEANIE_BMP].iter().collect::<PathBuf>();
-    let meanie = Rc::new(get_sprite(&meanie_path)?);
+    let smiley_path = Path::new(BMPS_DIR).join(SMILEY_BMP);
+    let meanie_path = Path::new(BMPS_DIR).join(MEANIE_BMP);
+    let smiley = Rc::new(Sprite::new(&smiley_path)?);
+    let meanie = Rc::new(Sprite::new(&meanie_path)?);
 
     let mut entities: Vec<_> = [
         (0.2, 0.2),
@@ -146,29 +143,18 @@ fn main() -> Result<()> {
 
     entities.push(Box::new(Player((0.5, 0.5), smiley.clone(), 10)));
 
-    let config = Config::new(TITLE.into(), UI_COLOR, BG_COLOR, cli.fps, entities)
-        .context("while parsing command line arguments")?;
-
-    if let Err(error) = game::init(config).context("while rendering snake game") {
+    if let Err(error) = Engine::new()
+        .set_title(TITLE)
+        .set_ui_color(UI_COLOR)
+        .set_bg_color(BG_COLOR)
+        .starting_entities(entities)
+        .init()
+        .context("while rendering snake game")
+    {
         // since the terminal has been hijacked, print errors to the log
         tracing::debug!("Error: {:?}", error);
         return Err(error);
     }
 
     Ok(())
-}
-
-fn get_sprite(path: &Path) -> Result<Sprite> {
-    let img = bmp::open(path)?;
-    let (width, height) = (img.get_width(), img.get_height());
-
-    let mut bytes =
-        Vec::with_capacity(std::mem::size_of::<bmp::Pixel>() * height as usize * width as usize);
-    bytes.extend(
-        img.coordinates()
-            .map(|(x, y)| img.get_pixel(x, height - y - 1))
-            .flat_map(|pixel| [pixel.r, pixel.g, pixel.b]),
-    );
-
-    Ok(Sprite::new(width, height, &bytes))
 }

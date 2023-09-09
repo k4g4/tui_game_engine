@@ -65,7 +65,7 @@ impl Sprite {
     }
 
     pub fn get_pixel(&self, x: u32, y: u32) -> (u8, u8, u8) {
-        let pixel = self.image.get_pixel(x, y);
+        let pixel = self.image.get_pixel(x, self.height() - y - 1);
         (pixel.r, pixel.g, pixel.b)
     }
 }

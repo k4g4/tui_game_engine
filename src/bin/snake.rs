@@ -143,10 +143,11 @@ fn main() -> Result<()> {
 
     entities.push(Box::new(Player((0.5, 0.5), smiley.clone(), 10)));
 
-    if let Err(error) = Engine::new()
+    if let Err(error) = Engine::default()
         .set_title(TITLE)
-        .set_ui_color(UI_COLOR)
-        .set_bg_color(BG_COLOR)
+        .set_ui_color(UI_COLOR)?
+        .set_bg_color(BG_COLOR)?
+        .set_fps(cli.fps)?
         .starting_entities(entities)
         .init()
         .context("while rendering snake game")

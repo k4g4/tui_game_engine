@@ -27,7 +27,7 @@ use thiserror::Error;
 use tracing::{debug, instrument};
 
 pub mod entity;
-use entity::{Entity, Input, Sprite, Update, Vector};
+use entity::{Entity, Input, Rotation, Sprite, Update, Vector};
 
 const FPS_BOUNDS: RangeInclusive<u32> = 1..=30;
 const DEFAULT_FPS: u32 = 15;
@@ -80,6 +80,7 @@ impl AddAssign<Vector> for Position {
 #[derive(Debug)]
 struct EntityState {
     pos: Option<Position>,
+    rot: Rotation,
     sprite: Rc<Sprite>,
     entity: Option<Box<dyn Entity>>,
 }
@@ -136,6 +137,7 @@ impl State {
 
         let entity_state = EntityState {
             pos: None,
+            rot: Rotation::Zero,
             sprite,
             entity: Some(entity),
         };
@@ -470,13 +472,15 @@ fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
             Update::None
         };
         match update {
-            Update::Move(vector) => {
+            Update::Action { step, rotate } => {
                 let old_pos = entity_state.pos;
-                *entity_state.pos.as_mut().expect("entity has a position") += vector;
+                *entity_state.pos.as_mut().expect("entity has a position") += step;
 
                 if !entity_state.within_bounds(state.bounds.expect("bounds should exist")) {
                     entity_state.pos = old_pos;
                 }
+
+                entity_state.rot += rotate;
             }
 
             Update::Destroy => {

@@ -2,7 +2,7 @@ use bmp::Image;
 use std::{
     fmt::{self, Debug, Formatter},
     path::Path,
-    rc::Rc,
+    rc::Rc, ops::AddAssign,
 };
 
 use crate::GameError;
@@ -31,11 +31,36 @@ impl Vector {
     }
 }
 
+/// Used for entities to specify rotation.
+#[derive(Copy, Clone, Default, Debug)]
+pub enum Rotation {
+    #[default]
+    Zero,
+    HalfPi,
+    Pi,
+    ThreeHalvesPi,
+}
+
+impl AddAssign for Rotation {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = match (*self as u32 + rhs as u32) % 4 {
+            0 => Rotation::Zero,
+            1 => Rotation::HalfPi,
+            2 => Rotation::Pi,
+            3 => Rotation::ThreeHalvesPi,
+            _ => panic!("bad arithmetic in Rotation::add_assign"),
+        };
+    }
+}
+
 #[derive(Copy, Clone, Default, Debug)]
 pub enum Update {
     #[default]
     None,
-    Move(Vector),
+    Action {
+        step: Vector,
+        rotate: Rotation,
+    },
     Destroy,
 }
 

@@ -8,7 +8,7 @@ use std::{
 use tracing::Level;
 
 use game::{
-    entity::{Effect, Entity, Input, Sprite, Update, Vector},
+    entity::{Effect, Entity, Input, Sprite, Update, Vector, Rotation},
     Engine,
 };
 
@@ -49,12 +49,19 @@ impl Entity for Player {
             return Update::Destroy;
         }
 
-        match input {
-            Input::Up => Update::Move(Vector::new(0, 2)),
-            Input::Down => Update::Move(Vector::new(0, -2)),
-            Input::Left => Update::Move(Vector::new(-2, 0)),
-            Input::Right => Update::Move(Vector::new(2, 0)),
-            _ => Update::None,
+        Update::Action {
+            step: match input {
+                Input::Up => Vector::new(0, 2),
+                Input::Down => Vector::new(0, -2),
+                Input::Left => Vector::new(-2, 0),
+                Input::Right => Vector::new(2, 0),
+                _ => Vector::default(),
+            },
+            rotate: match input {
+                Input::Left => Rotation::HalfPi,
+                Input::Right => Rotation::ThreeHalvesPi,
+                _ => Rotation::default(),
+            },
         }
     }
 

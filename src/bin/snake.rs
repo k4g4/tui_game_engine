@@ -8,7 +8,7 @@ use std::{
 use tracing::Level;
 
 use game::{
-    entity::{Effect, Entity, Input, Sprite, Update, Vector, Rotation},
+    entity::{Effect, Entity, Input, Rotation, Sprite, Update, Vector},
     Engine,
 };
 
@@ -23,7 +23,7 @@ const BMPS_DIR: &str = "bmps";
 const SMILEY_BMP: &str = "smiley.bmp";
 const MEANIE_BMP: &str = "meanie.bmp";
 
-const DEFAULT_FPS: u32 = 15;
+const DEFAULT_FPS: u32 = 5;
 const DEFAULT_LOG: &str = "snake.log";
 
 #[derive(Parser)]
@@ -37,7 +37,7 @@ struct Cli {
 }
 
 #[derive(Debug)]
-struct Player((f32, f32), Rc<Sprite>, i32);
+struct Player((f32, f32), Rc<Sprite>, i32, Rotation);
 
 impl Entity for Player {
     fn start_pos(&self) -> (f32, f32) {
@@ -49,17 +49,27 @@ impl Entity for Player {
             return Update::Destroy;
         }
 
+        let forward = match self.3 {
+            Rotation::Zero => Vector::new(0, 2),
+            Rotation::HalfPi => Vector::new(-2, 0),
+            Rotation::Pi => Vector::new(0, -2),
+            Rotation::ThreeHalvesPi => Vector::new(2, 0),
+        };
+
         Update::Action {
             step: match input {
-                Input::Up => Vector::new(0, 2),
-                Input::Down => Vector::new(0, -2),
-                Input::Left => Vector::new(-2, 0),
-                Input::Right => Vector::new(2, 0),
-                _ => Vector::default(),
+                Input::Up => forward,
+                _ => forward,
             },
             rotate: match input {
-                Input::Left => Rotation::HalfPi,
-                Input::Right => Rotation::ThreeHalvesPi,
+                Input::Left => {
+                    self.3 += Rotation::HalfPi;
+                    Rotation::HalfPi
+                }
+                Input::Right => {
+                    self.3 += Rotation::ThreeHalvesPi;
+                    Rotation::ThreeHalvesPi
+                }
                 _ => Rotation::default(),
             },
         }
@@ -148,7 +158,12 @@ fn main() -> Result<()> {
     .map(|pos| Box::new(Enemy(pos, meanie.clone(), 5)) as Box<dyn Entity>)
     .collect();
 
-    entities.push(Box::new(Player((0.5, 0.5), smiley.clone(), 10)));
+    entities.push(Box::new(Player(
+        (0.5, 0.5),
+        smiley.clone(),
+        10,
+        Rotation::Zero,
+    )));
 
     if let Err(error) = Engine::default()
         .set_title(TITLE)

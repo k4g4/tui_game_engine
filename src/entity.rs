@@ -1,8 +1,9 @@
 use bmp::Image;
 use std::{
     fmt::{self, Debug, Formatter},
+    ops::AddAssign,
     path::Path,
-    rc::Rc, ops::AddAssign,
+    rc::Rc,
 };
 
 use crate::GameError;
@@ -53,7 +54,7 @@ impl AddAssign for Rotation {
     }
 }
 
-#[derive(Copy, Clone, Default, Debug)]
+#[derive(Default, Debug)]
 pub enum Update {
     #[default]
     None,

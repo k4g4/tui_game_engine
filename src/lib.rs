@@ -148,7 +148,12 @@ impl State {
     fn set_starting_positions(&mut self) -> Result<(), GameError> {
         let bounds = &self.bounds.expect("bounds should exist");
 
-        for entity_state in &mut self.entity_states {
+        // for all entity states with no position set, call Entity::start_pos to assign a position
+        for entity_state in self
+            .entity_states
+            .iter_mut()
+            .filter(|entity_state| entity_state.borrow().pos.is_none())
+        {
             let entity_state = entity_state.get_mut();
             let (x, y) = entity_state
                 .entity
@@ -172,6 +177,111 @@ impl State {
             }
         }
         debug!("starting positions set");
+
+        Ok(())
+    }
+
+    fn render_entities(&self, ctx: &mut Context) -> Result<(), GameError> {
+        let mut painter = Painter::from(ctx);
+
+        for entity_state in &self.entity_states {
+            let entity_state = entity_state.borrow();
+            let pos = entity_state.pos.expect("entity has a position");
+            let sprite = &entity_state.sprite;
+
+            let (x_range, y_range) = if let Rotation::Zero | Rotation::Pi = entity_state.rot {
+                (0..sprite.width(), 0..sprite.height())
+            } else {
+                (0..sprite.height(), 0..sprite.width())
+            };
+
+            for x in x_range {
+                for y in y_range.clone() {
+                    let rgb = match entity_state.rot {
+                        Rotation::Zero => sprite.get_pixel(x, y),
+                        Rotation::HalfPi => {
+                            sprite.get_pixel(sprite.width() - y - 1, sprite.height() - x - 1)
+                        }
+                        Rotation::Pi => {
+                            sprite.get_pixel(sprite.width() - x - 1, sprite.height() - y - 1)
+                        }
+                        Rotation::ThreeHalvesPi => sprite.get_pixel(y, x),
+                    };
+
+                    let color = Color::Rgb(rgb.0, rgb.1, rgb.2);
+
+                    let (x_offset, y_offset) = painter
+                        .get_point(
+                            (pos.x + (x as i32 * X_SCALE)) as f64,
+                            (pos.y + (y as i32 * Y_SCALE)) as f64,
+                        )
+                        .ok_or(GameError::OutOfBounds)?;
+
+                    // sprites will look squished unless scaling factor is accounted for
+                    for x in 0..X_SCALE {
+                        for y in 0..Y_SCALE {
+                            painter.paint(x_offset - x as usize, y_offset - y as usize, color);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_entities(&mut self, input: Input) -> Result<(), GameError> {
+        for (index, entity_state) in self.entity_states.iter().enumerate() {
+            let mut entity_state = entity_state.borrow_mut();
+
+            // Get mut borrows for all other entity states. The run-time borrow checking
+            // will pass because even though entity_state has been mut borrowed already,
+            // its index is used to filter it out from the iter.
+            for mut other_entity_state in self
+                .entity_states
+                .iter()
+                .enumerate()
+                .filter(|(other_index, _)| *other_index != index)
+                .map(|(_, entity_state)| entity_state.borrow_mut())
+            {
+                if entity_state.overlaps(&other_entity_state) {
+                    if let Some(entity) = entity_state.entity.as_mut() {
+                        if let Some(other_entity) = other_entity_state.entity.as_mut() {
+                            entity.collision(other_entity);
+                        }
+                    }
+                }
+            }
+
+            let update = if let Some(entity) = entity_state.entity.as_mut() {
+                entity.update(input)
+            } else {
+                Update::None
+            };
+
+            match update {
+                Update::Action { step, rotate } => {
+                    let old_pos = entity_state.pos;
+                    *entity_state.pos.as_mut().expect("entity has a position") += step;
+
+                    if !entity_state.within_bounds(self.bounds.expect("bounds should exist")) {
+                        entity_state.pos = old_pos;
+                    }
+
+                    entity_state.rot += rotate;
+                }
+
+                Update::Destroy => {
+                    entity_state.entity = None;
+                }
+
+                Update::None => {}
+            }
+        }
+
+        // some entities may have been destroyed
+        self.entity_states
+            .retain(|entity_state| entity_state.borrow().entity.is_some());
 
         Ok(())
     }
@@ -358,20 +468,15 @@ impl Engine {
                 if *input == Input::Quit {
                     return Ok(());
                 }
-                update_entities(*input, &self.state)?;
+                self.state.update_entities(*input)?;
                 *input = Input::None;
             }
-
-            // some entities may have been destroyed
-            self.state
-                .entity_states
-                .retain(|entity_state| entity_state.borrow().entity.is_some());
 
             terminal.draw(|frame| {
                 frame.render_widget(
                     self.get_canvas().paint(|ctx| {
                         // render the entities, and hold onto any errors
-                        if let Err(error) = render_entities(ctx, &self.state) {
+                        if let Err(error) = self.state.render_entities(ctx) {
                             maybe_error.set(Some(error));
                         }
 
@@ -409,90 +514,3 @@ fn read_input() -> Input {
         _ => Input::None,
     }
 }
-
-fn render_entities(ctx: &mut Context, state: &State) -> Result<(), GameError> {
-    let mut painter = Painter::from(ctx);
-
-    for entity_state in &state.entity_states {
-        let entity_state = entity_state.borrow();
-        let pos = entity_state.pos.expect("entity has a position");
-        let sprite = &entity_state.sprite;
-
-        for x in 0..sprite.width() {
-            for y in 0..sprite.height() {
-                let rgb = sprite.get_pixel(x, y);
-                let color = Color::Rgb(rgb.0, rgb.1, rgb.2);
-
-                let (x_offset, y_offset) = painter
-                    .get_point(
-                        (pos.x + (x as i32 * X_SCALE)) as f64,
-                        (pos.y + (y as i32 * Y_SCALE)) as f64,
-                    )
-                    .ok_or(GameError::OutOfBounds)?;
-
-                // sprites will look squished unless scaling factor is accounted for
-                for x in 0..X_SCALE {
-                    for y in 0..Y_SCALE {
-                        painter.paint(x_offset - x as usize, y_offset - y as usize, color);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn update_entities(input: Input, state: &State) -> Result<(), GameError> {
-    for (index, entity_state) in state.entity_states.iter().enumerate() {
-        let mut entity_state = entity_state.borrow_mut();
-
-        // Get mut borrows for all other entity states. The run-time borrow checking
-        // will pass because even though entity_state has been mut borrowed already,
-        // its index is used to filter it out from the iter.
-        for mut other_entity_state in state
-            .entity_states
-            .iter()
-            .enumerate()
-            .filter(|(other_index, _)| *other_index != index)
-            .map(|(_, entity_state)| entity_state.borrow_mut())
-        {
-            if entity_state.overlaps(&other_entity_state) {
-                if let Some(entity) = entity_state.entity.as_mut() {
-                    if let Some(other_entity) = other_entity_state.entity.as_mut() {
-                        entity.collision(other_entity);
-                    }
-                }
-            }
-        }
-
-        let update = if let Some(entity) = entity_state.entity.as_mut() {
-            entity.update(input)
-        } else {
-            Update::None
-        };
-        match update {
-            Update::Action { step, rotate } => {
-                let old_pos = entity_state.pos;
-                *entity_state.pos.as_mut().expect("entity has a position") += step;
-
-                if !entity_state.within_bounds(state.bounds.expect("bounds should exist")) {
-                    entity_state.pos = old_pos;
-                }
-
-                entity_state.rot += rotate;
-            }
-
-            Update::Destroy => {
-                entity_state.entity = None;
-            }
-
-            Update::None => {}
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {}
